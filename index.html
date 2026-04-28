@@ -740,7 +740,6 @@
           <span>Desk Study Report</span>
           <div class="report-actions">
             <button class="report-action-btn" id="btnExport" onclick="exportToWord()">&#x1F4C4; Export to Word</button>
-            <button class="report-action-btn" id="btnPrintMap" onclick="openPrintModal()">&#x1F5FA; Export Map</button>
             <button class="report-action-btn" onclick="resetTool()">Reset</button>
           </div>
         </div>
@@ -807,16 +806,12 @@ require([
   "esri/identity/IdentityManager",
   "esri/layers/GraphicsLayer",
   "esri/widgets/Sketch/SketchViewModel",
-  "esri/rest/print",
-  "esri/rest/support/PrintTemplate",
-  "esri/rest/support/PrintParameters",
 ], function(
   Map, MapView, WebMap,
   geometryEngineAsync,
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager,
-  GraphicsLayer, SketchViewModel,
-  printREST, PrintTemplate, PrintParameters
+  GraphicsLayer, SketchViewModel
 ) {
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -2147,9 +2142,6 @@ require([
 
     hideProgress();
     renderLayerList(results);
-    window._lastResults = results;
-    window._lastBuffers = buffers;
-    window._lastSiteName = document.getElementById("btnSelectLabel").textContent.replace("✓ ", "") || "";
 
     // Await JNCC in parallel — by now it will usually already be done
     setStatus("running", "Finalising report…");
@@ -2419,7 +2411,7 @@ require([
       html += P(`${statRows.length} statutory designated site${statRows.length !== 1 ? "s" : ""} for nature conservation ${statRows.length !== 1 ? "were" : "was"} identified during the desk study (${parts.join("; ")}) and ${statRows.length !== 1 ? "are" : "is"} summarised in Table 1 below.`);
       html += `<p><strong>Table 1: Summary of Statutory Designated Sites for Nature Conservation</strong></p>
       <table><thead><tr><th>Site Name</th><th>Size, Distance and Direction from Site</th><th>Reason for Designation</th><th>Importance</th></tr></thead><tbody>`;
-      for (const row of statRows.filter(r => r.imp !== "Local")) {
+      for (const row of statRows) {
         const sizeStr = row.ha ? `${row.ha} hectares<br>` : "";
         const distText = locStr(row.distM, row.dir);
         // Ensure "approx." prefix and capitalise first letter
@@ -3154,149 +3146,7 @@ require([
     document.getElementById("btnRunLabel").textContent = "Run Desk Study";
   }
 
-  // ── Export Map ────────────────────────────────────────────────────────────
-  const PRINT_URL = "https://utility.arcgisonline.com/arcgis/rest/services/Utilities/PrintingTools/GPServer/Export%20Web%20Map%20Task";
-
-  window.openPrintModal = function() {
-    // Pre-fill title from current LAD results if available
-    const ladResult = Object.values(window._lastResults || {}).find(r => r?.cfg?.type === "lad");
-    const ladName = ladResult?.names?.[0] || "";
-    const bufferKm = Object.values(window._lastBuffers || {}).reduce((max, v) => Math.max(max, v), 0);
-    document.getElementById("pmTitle").value =
-      `Protected Sites Within ${bufferKm > 0 ? bufferKm + "km" : "Buffer"}` +
-      (ladName ? ` — ${ladName}` : "");
-    document.getElementById("pmProject").value = window._lastSiteName || "";
-    document.getElementById("pmStatus").style.display = "none";
-    document.getElementById("pmBtn").disabled = false;
-    document.getElementById("pmBtn").textContent = "Export";
-    document.getElementById("printModal").style.display = "flex";
-  };
-
-  window.closePrintModal = function() {
-    document.getElementById("printModal").style.display = "none";
-  };
-
-  window.executePrint = async function() {
-    const btn = document.getElementById("pmBtn");
-    const status = document.getElementById("pmStatus");
-    btn.disabled = true;
-    btn.textContent = "Exporting…";
-    status.innerHTML = "";
-    status.style.display = "block";
-    status.style.color = "#1a5da0";
-    status.textContent = "⏳ Sending to print service…";
-
-    const title   = document.getElementById("pmTitle").value || "Protected Sites";
-    const project = document.getElementById("pmProject").value || "";
-    const format  = document.getElementById("pmFormat").value;
-    const layout  = document.getElementById("pmLayout").value;
-    const scale   = document.getElementById("pmScale").value;
-
-    const layoutOptions = {
-      titleText: title,
-      authorText: "Clarkson & Woods Ecological Consultants",
-      copyrightText: `© Crown copyright and database rights ${new Date().getFullYear()} Ordnance Survey`,
-      scalebarUnit: "Meters",
-    };
-    if (project) layoutOptions.customTextElements = [{ "Project": project }];
-
-    const exportOptions = { dpi: 200 };
-
-    let result;
-    try {
-      const template = new PrintTemplate({
-        format,
-        layout,
-        layoutOptions,
-        exportOptions,
-        outScale: scale ? parseInt(scale) : undefined,
-        preserveScale: !!scale,
-      });
-      const params = new PrintParameters({ view, template });
-      status.textContent = "⏳ Generating map (may take up to 30 seconds)…";
-      console.log("Executing print:", PRINT_URL, { format, layout });
-      result = await printREST.execute(PRINT_URL, params);
-      console.log("Print result:", result);
-    } catch(err) {
-      console.error("Print error:", err);
-      status.style.color = "#c00";
-      status.textContent = `✗ Print service error: ${err?.message || JSON.stringify(err)}`;
-      btn.disabled = false;
-      btn.textContent = "Export";
-      return;
-    }
-
-    if (!result?.url) {
-      status.style.color = "#c00";
-      status.textContent = "✗ Print service returned no URL. Try a different format or layout.";
-      btn.disabled = false;
-      btn.textContent = "Export";
-      return;
-    }
-
-    // Success — show clickable link (window.open may be blocked by popup blocker)
-    status.style.color = "#1a3d2b";
-    status.innerHTML = `✓ Map ready — <a href="${result.url}" target="_blank" style="color:#1a3d2b;font-weight:bold;">click here to open / download ↗</a>`;
-    // Also try window.open
-    window.open(result.url, "_blank");
-    btn.disabled = false;
-    btn.textContent = "Export Again";
-  };
-
 }); // end require
 </script>
-<!-- ── Print Map Modal ───────────────────────────────────────────────────── -->
-<div id="printModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:10px;padding:24px;width:360px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.25);font-family:'Georgia',serif;">
-    <h3 style="margin:0 0 16px;font-size:15px;color:#1a3d2b;">Export Map Options</h3>
-
-    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Map Title</label>
-    <input id="pmTitle" type="text" placeholder="Protected Sites Within Xkm"
-      style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;"/>
-
-    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Project Name</label>
-    <input id="pmProject" type="text" placeholder="e.g. Land at Church Farm"
-      style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;"/>
-
-    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Format</label>
-    <select id="pmFormat" style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;">
-      <option value="jpg">JPG</option>
-      <option value="png32">PNG</option>
-      <option value="pdf">PDF</option>
-    </select>
-
-    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Layout</label>
-    <select id="pmLayout" style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;">
-      <option value="a3-landscape">A3 Landscape</option>
-      <option value="a4-landscape">A4 Landscape</option>
-      <option value="a3-portrait">A3 Portrait</option>
-      <option value="a4-portrait">A4 Portrait</option>
-    </select>
-
-    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Scale</label>
-    <select id="pmScale" style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:16px;box-sizing:border-box;">
-      <option value="">Current view (no fixed scale)</option>
-      <option value="10000">1:10,000</option>
-      <option value="25000">1:25,000</option>
-      <option value="50000">1:50,000</option>
-      <option value="100000">1:100,000</option>
-      <option value="200000">1:200,000</option>
-    </select>
-
-    <div id="pmStatus" style="font-size:11px;color:#1a5da0;margin-bottom:12px;display:none;"></div>
-
-    <div style="display:flex;gap:8px;justify-content:flex-end;">
-      <button onclick="closePrintModal()"
-        style="padding:7px 16px;border:1px solid #c9dece;border-radius:5px;background:#fff;font-family:'Georgia',serif;font-size:12px;cursor:pointer;color:#3a4a3e;">
-        Cancel
-      </button>
-      <button id="pmBtn" onclick="executePrint()"
-        style="padding:7px 16px;border:none;border-radius:5px;background:#1a3d2b;color:#fff;font-family:'Georgia',serif;font-size:12px;cursor:pointer;font-weight:bold;">
-        Export
-      </button>
-    </div>
-  </div>
-</div>
-
 </body>
 </html>

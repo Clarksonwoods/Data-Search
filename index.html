@@ -1,0 +1,3302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Automated Desk Study</title>
+
+  <!-- ArcGIS Maps SDK 4.29 -->
+  <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" />
+  <script src="https://js.arcgis.com/4.29/"></script>
+
+  <!-- SheetJS: suppress AMD before loading so Dojo doesn't consume it -->
+  <script>
+    (function() {
+      var s = document.createElement("script");
+      s.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+      s.onload = function() { console.log("SheetJS ready, XLSX.read:", typeof (window.XLSX||{}).read); };
+      s.onerror = function() { console.warn("SheetJS CDN failed"); };
+      // Temporarily hide define.amd so SheetJS uses the window global path
+      var _amd;
+      if (typeof define === "function" && define.amd) {
+        _amd = define.amd;
+        define.amd = false;
+        var _restore = s.onload;
+        s.onload = function() { define.amd = _amd; _restore(); };
+        s.onerror = function() { define.amd = _amd; console.warn("SheetJS CDN failed"); };
+      }
+      document.head.appendChild(s);
+    })();
+  </script>
+
+  <style>
+    /* ── Tokens ──────────────────────────────────────────────────── */
+    :root {
+      --green-dark:   #1a3d2b;
+      --green-mid:    #2d6a4f;
+      --green-bright: #52b788;
+      --green-light:  #d8f3dc;
+      --green-pale:   #f0faf3;
+      --amber:        #e9c46a;
+      --amber-dark:   #8a6200;
+      --red:          #c1121f;
+      --red-light:    #fff0f0;
+      --ink:          #111d13;
+      --ink-mid:      #3a4a3e;
+      --ink-faint:    #6b7c6f;
+      --line:         #c9dece;
+      --surface:      #ffffff;
+      --bg:           #f4f9f5;
+      --radius:       6px;
+      --radius-lg:    10px;
+      --shadow:       0 2px 8px rgba(29,63,40,.10);
+      --shadow-lg:    0 6px 24px rgba(29,63,40,.13);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Georgia', serif;
+      background: var(--bg);
+      color: var(--ink);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────── */
+    header {
+      background: var(--green-dark);
+      color: #fff;
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-shrink: 0;
+      box-shadow: 0 2px 6px rgba(0,0,0,.25);
+      z-index: 10;
+    }
+    header svg { flex-shrink: 0; }
+    header h1 {
+      font-size: 15px;
+      font-weight: normal;
+      letter-spacing: .03em;
+    }
+    header h1 strong { font-weight: bold; font-size: 16px; }
+    header p { font-size: 11px; color: var(--green-bright); margin-top: 1px; letter-spacing: .02em; }
+
+    /* ── Layout ─────────────────────────────────────────────────── */
+    .layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Panel ──────────────────────────────────────────────────── */
+    .panel {
+      width: 340px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-inner {
+      padding: 16px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .panel-inner::-webkit-scrollbar { width: 5px; }
+    .panel-inner::-webkit-scrollbar-track { background: transparent; }
+    .panel-inner::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+    /* ── Map ────────────────────────────────────────────────────── */
+    #viewDiv {
+      flex: 1;
+      position: relative;
+    }
+
+    /* ── Section label ──────────────────────────────────────────── */
+    .section-label {
+      font-size: 10px;
+      font-weight: bold;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin-bottom: 8px;
+      margin-top: 18px;
+    }
+    .section-label:first-child { margin-top: 0; }
+
+    /* ── Config note ────────────────────────────────────────────── */
+    .config-note {
+      background: #fffbea;
+      border: 1px solid #f0d060;
+      border-radius: var(--radius);
+      padding: 8px 10px;
+      font-size: 11px;
+      color: #6b5200;
+      line-height: 1.5;
+      margin-bottom: 14px;
+    }
+    .config-note strong { font-weight: bold; }
+
+    /* ── Buffer control ─────────────────────────────────────────── */
+    .buffer-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .buffer-row label {
+      font-size: 11px;
+      color: var(--ink-faint);
+      width: 80px;
+      flex-shrink: 0;
+    }
+    .buffer-row input[type=number] {
+      width: 58px;
+      padding: 4px 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      font-size: 12px;
+      font-family: 'Georgia', serif;
+      color: var(--ink);
+      background: var(--surface);
+    }
+    .buffer-row input[type=number]:focus {
+      outline: none;
+      border-color: var(--green-mid);
+      box-shadow: 0 0 0 3px rgba(45,106,79,.15);
+    }
+    .buffer-row span { font-size: 12px; color: var(--ink-mid); }
+    .buffer-row .cat-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-weight: bold;
+      flex: 1;
+    }
+    .badge-intl-sm  { background: #e8f4ed; color: var(--green-dark); }
+    .badge-natl-sm  { background: #e8f0fb; color: #1a3a6b; }
+    .badge-local-sm { background: #fef9e7; color: #7a5200; }
+    .badge-rec-sm   { background: #f5f0fb; color: #4a2080; }
+
+    /* ── Buffer group ────────────────────────────────────────────── */
+    .buf-group { margin-bottom: 5px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+    .buf-group-header {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px; cursor: pointer; user-select: none;
+      background: var(--bg);
+    }
+    .buf-group-header:hover { background: var(--green-pale); }
+    .buf-chevron { font-size: 9px; color: var(--ink-faint); transition: transform .15s; flex-shrink: 0; }
+    .buf-chevron.open { transform: rotate(90deg); }
+    .buf-badge {
+      font-size: 10px; padding: 1px 7px; border-radius: 3px;
+      font-weight: bold; flex: 1;
+    }
+    .buf-input {
+      width: 46px; padding: 2px 5px; border: 1px solid var(--line);
+      border-radius: 3px; font-size: 12px; font-family: 'Georgia', serif;
+      color: var(--ink); background: var(--surface); text-align: right;
+    }
+    .buf-input:focus { outline: none; border-color: var(--green-mid); }
+    .buf-km { font-size: 11px; color: var(--ink-faint); flex-shrink: 0; }
+
+    /* layer chips container */
+    .buf-layers {
+      display: none; padding: 4px 6px 6px;
+      background: var(--surface);
+      min-height: 28px;
+      border-top: 1px solid var(--line);
+    }
+    .buf-layers.open { display: block; }
+    .buf-layers.drag-over { background: var(--green-pale); }
+
+    /* individual draggable chip */
+    .layer-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 7px 2px 5px;
+      margin: 2px 2px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      font-size: 10px; color: var(--ink-mid);
+      background: var(--bg);
+      cursor: grab; user-select: none;
+      transition: background .1s, border-color .1s;
+    }
+    .layer-chip:hover { border-color: var(--green-mid); color: var(--green-dark); background: var(--green-pale); }
+    .layer-chip.dragging { opacity: .4; cursor: grabbing; }
+    .layer-chip .chip-drag { font-size: 9px; color: var(--ink-faint); }
+    .preset-row { display: flex; gap: 5px; flex-wrap: wrap; }
+    .preset-btn {
+      padding: 4px 10px;
+      font-size: 11px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--bg);
+      color: var(--ink-mid);
+      cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s;
+      font-family: 'Georgia', serif;
+    }
+    .preset-btn:hover { border-color: var(--green-mid); color: var(--green-dark); }
+    .preset-btn.active {
+      background: var(--green-dark);
+      border-color: var(--green-dark);
+      color: #fff;
+    }
+
+    /* ── Buttons ────────────────────────────────────────────────── */
+    .step-btn {
+      width: 100%;
+      padding: 9px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-family: 'Georgia', serif;
+      cursor: pointer;
+      transition: all .15s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      border: 1px solid transparent;
+    }
+    .step-num {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: bold;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .btn-select {
+      background: var(--surface);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .btn-select .step-num { background: var(--green-light); color: var(--green-dark); }
+    .btn-select:hover:not(:disabled) { border-color: var(--green-mid); }
+    .btn-select.selecting {
+      background: var(--green-light);
+      border-color: var(--green-mid);
+      color: var(--green-dark);
+      animation: pulse-border 1.4s ease-in-out infinite;
+    }
+    .btn-select.selected {
+      border-color: var(--green-bright);
+      background: var(--green-pale);
+    }
+    @keyframes pulse-border {
+      0%,100% { box-shadow: 0 0 0 0 rgba(82,183,136,.3); }
+      50%      { box-shadow: 0 0 0 5px rgba(82,183,136,0); }
+    }
+    .btn-draw {
+      background: var(--surface);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .btn-draw .step-num { background: #fef3cd; color: var(--amber-dark); }
+    .btn-draw:hover:not(:disabled) { border-color: var(--amber-dark); }
+    .btn-draw.drawing {
+      background: #fffbea;
+      border-color: var(--amber-dark);
+      color: var(--amber-dark);
+      animation: pulse-amber 1.4s ease-in-out infinite;
+    }
+    .btn-draw.selected { border-color: var(--amber-dark); background: #fffbea; color: var(--amber-dark); }
+    @keyframes pulse-amber {
+      0%,100% { box-shadow: 0 0 0 0 rgba(233,196,106,.4); }
+      50%      { box-shadow: 0 0 0 5px rgba(233,196,106,0); }
+    }
+    .btn-run {
+      background: var(--green-mid);
+      color: #fff;
+      border-color: var(--green-mid);
+      font-weight: bold;
+    }
+    .btn-run .step-num { background: rgba(255,255,255,.25); color: #fff; }
+    .btn-run:hover:not(:disabled) { background: var(--green-dark); border-color: var(--green-dark); }
+    .btn-run:disabled {
+      background: #b0c8b8;
+      border-color: #b0c8b8;
+      cursor: not-allowed;
+      color: rgba(255,255,255,.7);
+    }
+
+    /* ── Status ─────────────────────────────────────────────────── */
+    .status-bar {
+      font-size: 11px;
+      padding: 6px 10px;
+      border-radius: var(--radius);
+      margin-bottom: 8px;
+      display: none;
+    }
+    .status-bar.info  { background: var(--green-pale); color: var(--green-mid); border: 1px solid var(--line); display: block; }
+    .status-bar.error { background: var(--red-light); color: var(--red); border: 1px solid #f5c0c0; display: block; }
+    .status-bar.running { background: #f0f7ff; color: #1a5da0; border: 1px solid #b8d4f0; display: block; }
+
+    /* ── Progress ───────────────────────────────────────────────── */
+    .progress-wrap { display: none; margin-bottom: 10px; }
+    .progress-wrap.active { display: block; }
+    .progress-track {
+      height: 4px;
+      background: var(--line);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--green-bright);
+      border-radius: 2px;
+      transition: width .3s ease;
+      width: 0%;
+    }
+    .progress-label { font-size: 10px; color: var(--ink-faint); margin-top: 4px; }
+
+    /* ── Layer checklist ────────────────────────────────────────── */
+    .layer-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+    .layer-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: var(--radius);
+      font-size: 11px;
+      color: var(--ink-mid);
+      border: 1px solid transparent;
+    }
+    .layer-item.found   { background: var(--green-pale); border-color: var(--line); color: var(--green-dark); }
+    .layer-item.absent  { background: #fafafa; border-color: #ebebeb; color: var(--ink-faint); }
+    .layer-item.missing { background: #fff8ee; border-color: #f5dfa0; color: #7a5200; }
+    .layer-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    }
+    .layer-item.found   .layer-dot { background: var(--green-bright); }
+    .layer-item.absent  .layer-dot { background: #ccc; }
+    .layer-item.missing .layer-dot { background: var(--amber); }
+    .layer-count {
+      margin-left: auto;
+      font-weight: bold;
+      font-size: 11px;
+    }
+
+    /* ── Report ─────────────────────────────────────────────────── */
+    .report-box {
+      display: none;
+      border: 1px solid var(--green-bright);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .report-box.visible { display: block; }
+    .report-header {
+      background: var(--green-dark);
+      color: #fff;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .report-header span { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+    .report-actions { display: flex; gap: 6px; }
+    .report-action-btn {
+      padding: 3px 10px;
+      font-size: 11px;
+      border-radius: 3px;
+      border: 1px solid rgba(255,255,255,.3);
+      background: transparent;
+      color: #fff;
+      cursor: pointer;
+      font-family: 'Georgia', serif;
+      transition: background .15s;
+    }
+    .report-action-btn:hover { background: rgba(255,255,255,.15); }
+    .report-action-btn.copied { background: var(--green-bright); border-color: var(--green-bright); color: var(--green-dark); }
+    .report-body {
+      padding: 14px;
+      font-size: 12px;
+      line-height: 1.7;
+      color: var(--ink);
+      background: var(--surface);
+    }
+    .report-body h2 {
+      font-size: 13px;
+      font-weight: bold;
+      margin: 14px 0 4px;
+      color: var(--ink);
+    }
+    .report-body h3 {
+      font-size: 12px;
+      font-weight: bold;
+      margin: 10px 0 4px;
+      color: var(--ink);
+    }
+    .report-body p {
+      margin: 0 0 8px;
+    }
+    .report-body .para-num {
+      font-weight: bold;
+      margin-right: 6px;
+    }
+    .report-body table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      margin: 8px 0 14px;
+    }
+    .report-body th {
+      background: var(--green-dark);
+      color: #fff;
+      padding: 5px 8px;
+      text-align: left;
+      font-weight: 500;
+    }
+    .report-body td {
+      padding: 5px 8px;
+      border: 1px solid var(--line);
+      vertical-align: top;
+    }
+    .report-body tr:nth-child(even) td { background: var(--bg); }
+    .report-body .badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: bold;
+    }
+    .report-body .badge-intl  { background: #e8f4ed; color: var(--green-dark); }
+    .report-body .badge-natl  { background: #e8f0fb; color: #1a3a6b; }
+    .report-body .badge-local { background: #fef9e7; color: #7a5200; }
+    .report-body .placeholder {
+      background: #fffbea;
+      border: 1px dashed #e0c060;
+      border-radius: 3px;
+      padding: 3px 6px;
+      font-style: italic;
+      color: #8a6200;
+      font-size: 11px;
+    }
+    .report-body .citation-link {
+      font-size: 10px;
+      color: var(--green-mid);
+      text-decoration: none;
+    }
+    .report-body .citation-link:hover { text-decoration: underline; }
+    .report-body ul {
+      margin: 4px 0 8px 16px;
+      padding: 0;
+    }
+    .report-body ul li { margin-bottom: 2px; }
+
+    /* ── Reset ──────────────────────────────────────────────────── */
+    .reset-btn {
+      width: 100%;
+      padding: 7px;
+      font-size: 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--ink-faint);
+      cursor: pointer;
+      font-family: 'Georgia', serif;
+      transition: all .15s;
+      margin-top: 6px;
+    }
+    .reset-btn:hover { border-color: var(--red); color: var(--red); }
+
+    /* ── Layer panel toggle button ──────────────────────────────── */
+    #layerToggleBtn {
+      position: absolute;
+      top: 12px; right: 12px;
+      z-index: 10;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 12px;
+      font-family: 'Georgia', serif;
+      color: var(--ink-mid);
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: border-color .15s;
+    }
+    #layerToggleBtn:hover { border-color: var(--green-mid); color: var(--green-dark); }
+    #layerToggleBtn.active { background: var(--green-dark); color: #fff; border-color: var(--green-dark); }
+
+    /* ── Layer panel drawer ─────────────────────────────────────── */
+    #layerPanel {
+      position: absolute;
+      top: 0; right: 0;
+      width: 260px;
+      height: 100%;
+      background: var(--surface);
+      border-left: 1px solid var(--line);
+      box-shadow: -4px 0 16px rgba(0,0,0,.08);
+      display: flex;
+      flex-direction: column;
+      z-index: 9;
+      transform: translateX(100%);
+      transition: transform .22s ease;
+    }
+    #layerPanel.open { transform: translateX(0); }
+    .lp-header {
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .lp-close { background: none; border: none; cursor: pointer; color: var(--ink-faint); font-size: 16px; line-height: 1; padding: 0 2px; }
+    .lp-close:hover { color: var(--ink); }
+    .lp-body { overflow-y: auto; flex: 1; padding: 8px 0; }
+    .lp-body::-webkit-scrollbar { width: 4px; }
+    .lp-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+    .lp-group-row { display: flex; align-items: center; gap: 6px; padding: 5px 14px; cursor: pointer; user-select: none; }
+    .lp-group-row:hover { background: var(--bg); }
+    .lp-chevron { font-size: 9px; color: var(--ink-faint); transition: transform .15s; flex-shrink: 0; width: 10px; }
+    .lp-chevron.open { transform: rotate(90deg); }
+    .lp-group-check { width: 13px; height: 13px; accent-color: var(--green-mid); flex-shrink: 0; cursor: pointer; }
+    .lp-group-label { font-size: 12px; font-weight: bold; color: var(--ink); flex: 1; }
+    .lp-children { display: none; }
+    .lp-children.open { display: block; }
+    .lp-layer-row { display: flex; align-items: center; gap: 6px; padding: 4px 14px 4px 32px; cursor: pointer; }
+    .lp-layer-row:hover { background: var(--bg); }
+    .lp-layer-check { width: 13px; height: 13px; accent-color: var(--green-mid); flex-shrink: 0; cursor: pointer; }
+    .lp-layer-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; border: 1px solid rgba(0,0,0,.12); }
+    .lp-layer-label { font-size: 11px; color: var(--ink-mid); flex: 1; line-height: 1.3; }
+    .lp-layer-row.wms .lp-layer-label { font-style: italic; color: var(--ink-faint); }
+
+    /* ── Search bar ─────────────────────────────────────────────── */
+    #searchBar {
+      position: absolute;
+      top: 12px; left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: visible;
+      width: 320px;
+    }
+    #searchInput {
+      flex: 1;
+      padding: 6px 10px;
+      border: none;
+      outline: none;
+      font-size: 12px;
+      font-family: 'Georgia', serif;
+      color: var(--ink);
+      background: transparent;
+      min-width: 0;
+    }
+    #searchBtn {
+      padding: 6px 10px;
+      background: var(--green-dark);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      flex-shrink: 0;
+      transition: background .15s;
+    }
+    #searchBtn:hover { background: var(--green-mid); }
+    #searchResults {
+      position: absolute;
+      top: 100%;
+      left: 0; right: 0;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-top: none;
+      border-radius: 0 0 var(--radius) var(--radius);
+      box-shadow: var(--shadow);
+      display: none;
+      z-index: 20;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    #searchResults.active { display: block; }
+    .search-result-item {
+      padding: 7px 10px;
+      font-size: 11px;
+      color: var(--ink-mid);
+      cursor: pointer;
+      border-bottom: 1px solid var(--line);
+      line-height: 1.4;
+    }
+    .search-result-item:last-child { border-bottom: none; }
+    .search-result-item:hover { background: var(--bg); color: var(--green-dark); }
+    .search-result-item .result-type { font-size: 10px; color: var(--ink-faint); margin-left: 4px; }
+
+    /* ── Map selecting overlay ──────────────────────────────────── */
+    #selectOverlay {
+      position: absolute;
+      top: 12px; left: 50%;
+      transform: translateX(-50%);
+      background: var(--green-dark);
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-family: 'Georgia', serif;
+      pointer-events: none;
+      display: none;
+      z-index: 5;
+      box-shadow: var(--shadow-lg);
+      white-space: nowrap;
+    }
+    #selectOverlay.active { display: block; animation: fadeDown .2s ease; }
+    @keyframes fadeDown {
+      from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ───────────────────────────────────────────────────────────── -->
+<header>
+  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+    <circle cx="14" cy="14" r="13" stroke="#52b788" stroke-width="1.5"/>
+    <circle cx="14" cy="14" r="7" stroke="#52b788" stroke-width="1" stroke-dasharray="2 2"/>
+    <circle cx="14" cy="14" r="3" fill="#52b788"/>
+    <line x1="14" y1="1" x2="14" y2="5" stroke="#52b788" stroke-width="1.5"/>
+    <line x1="14" y1="23" x2="14" y2="27" stroke="#52b788" stroke-width="1.5"/>
+    <line x1="1" y1="14" x2="5" y2="14" stroke="#52b788" stroke-width="1.5"/>
+    <line x1="23" y1="14" x2="27" y2="14" stroke="#52b788" stroke-width="1.5"/>
+  </svg>
+  <div>
+    <h1><strong>Clarkson & Woods Automated Desk Study</strong></h1>
+    <p>Query layers within a pre-selected buffer distance of your RLB to produce a report paragraph</p>
+  </div>
+</header>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────── -->
+<div class="layout">
+
+  <!-- Panel -->
+  <div class="panel">
+    <div class="panel-inner">
+
+      <!-- Buffer distances by category — expandable with draggable layers -->
+      <div class="section-label">Search distances</div>
+      <div id="bufferGroups"></div>
+
+      <!-- JNCC status -->
+      <div id="jnccStatus" style="font-size:10px;padding:5px 8px;margin-bottom:8px;border-radius:4px;background:#f0f7ff;border:1px solid #b8d4f0;color:#1a5da0;">
+        ⏳ Loading species protection data…
+      </div>
+
+      <!-- Steps -->
+      <div class="section-label">Steps</div>
+      <div id="statusBar" class="status-bar"></div>
+
+      <button class="step-btn btn-select" id="btnSelect" onclick="startSelection()">
+        <span class="step-num">1</span>
+        <span id="btnSelectLabel">Select red line boundary</span>
+      </button>
+
+      <button class="step-btn btn-draw" id="btnDraw" onclick="startDraw()">
+        <span class="step-num">1</span>
+        <span id="btnDrawLabel">Draw red line boundary</span>
+      </button>
+
+      <button class="step-btn btn-run" id="btnRun" disabled onclick="runAnalysis()">
+        <span class="step-num">2</span>
+        <span id="btnRunLabel">Run Desk Study</span>
+      </button>
+
+      <!-- Progress -->
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+        <div class="progress-label" id="progressLabel">Querying layers…</div>
+      </div>
+
+      <!-- Layer results -->
+      <div id="layerResults" style="display:none">
+        <div class="section-label">Layer results</div>
+        <div class="layer-list" id="layerList"></div>
+      </div>
+
+      <!-- Report -->
+      <div class="report-box" id="reportBox">
+        <div class="report-header">
+          <span>Desk Study Report</span>
+          <div class="report-actions">
+            <button class="report-action-btn" id="btnExport" onclick="exportToWord()">&#x1F4C4; Export to Word</button>
+            <button class="report-action-btn" id="btnPrintMap" onclick="openPrintModal()">&#x1F5FA; Export Map</button>
+            <button class="report-action-btn" onclick="resetTool()">Reset</button>
+          </div>
+        </div>
+        <div class="report-body" id="reportBody"></div>
+      </div>
+
+      <button class="reset-btn" id="btnReset" style="display:none" onclick="resetTool()">
+        ↺ Start new screening
+      </button>
+
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="viewDiv">
+    <div id="selectOverlay">Click a red line boundary feature on the map</div>
+
+    <!-- Search bar -->
+    <div id="searchBar">
+      <input type="text" id="searchInput" placeholder="Search location or red line boundary…" autocomplete="off"
+        onkeydown="if(event.key==='Enter') runSearch()"
+        oninput="onSearchInput(this.value)" />
+      <button id="searchBtn" onclick="runSearch()">&#x1F50D;</button>
+      <div id="searchResults"></div>
+    </div>
+
+    <!-- Layer panel toggle -->
+    <button id="layerToggleBtn" onclick="toggleLayerPanel()">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="1" y="1" width="5" height="5" rx="1"/>
+        <rect x="8" y="1" width="5" height="5" rx="1"/>
+        <rect x="1" y="8" width="5" height="5" rx="1"/>
+        <rect x="8" y="8" width="5" height="5" rx="1"/>
+      </svg>
+      Layers
+    </button>
+
+    <!-- Layer panel drawer -->
+    <div id="layerPanel">
+      <div class="lp-header">
+        <span>Map Layers</span>
+        <button class="lp-close" onclick="toggleLayerPanel()">&#x2715;</button>
+      </div>
+      <div class="lp-body" id="layerPanelBody">
+        <div style="padding:14px;font-size:11px;color:var(--ink-faint)">Loading layers…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Word export uses fflate (WASM-free zip, no AMD conflict) loaded after Dojo -->
+
+<!-- ── Script ────────────────────────────────────────────────────────────── -->
+<script>
+require([
+  "esri/Map",
+  "esri/views/MapView",
+  "esri/WebMap",
+  "esri/geometry/geometryEngineAsync",
+  "esri/Graphic",
+  "esri/rest/query",
+  "esri/rest/support/Query",
+  "esri/identity/OAuthInfo",
+  "esri/identity/IdentityManager",
+  "esri/layers/GraphicsLayer",
+  "esri/widgets/Sketch/SketchViewModel",
+  "esri/rest/print",
+  "esri/rest/support/PrintTemplate",
+  "esri/rest/support/PrintParameters",
+], function(
+  Map, MapView, WebMap,
+  geometryEngineAsync,
+  Graphic, queryREST, Query,
+  OAuthInfo, IdentityManager,
+  GraphicsLayer, SketchViewModel,
+  printREST, PrintTemplate, PrintParameters
+) {
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ██  CONFIG
+  // ══════════════════════════════════════════════════════════════════════════
+  const CONFIG = {
+
+    portalUrl: "https://www.arcgis.com",
+    webMapId:  "51a20531f9f44c4682f1bb246981ea86",
+    appId: "pduqao2ad2vWm62Z",
+
+    // Matches the red line boundary layer by title
+    redLineTitlePattern: /red.?line.?boundar/i,
+
+    // ── Layers ──────────────────────────────────────────────────────────────
+    // title        — exact layer title as it appears in the web map
+    // shortName    — used in the report paragraph
+    // nameField    — attribute field holding the designation/feature name
+    //                set to null for layers where just the count is reported
+    // type         — "statutory" | "habitat" | "river" | "bat" | "records"
+    // groupByField — true: list unique nameField values (e.g. habitat types)
+    // maxList      — max names to spell out before "and N others"
+    layers: [
+
+      // ── England: statutory designations ──────────────────────────────────
+      { title: "Sites of Special Scientific Interest (England)",
+        shortName: "Sites of Special Scientific Interest (SSSIs)",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      { title: "Special Areas of Conservation (England)",
+        shortName: "Special Areas of Conservation (SACs)",
+        nameField: "SAC_NAME", type: "statutory", maxList: 4 },
+
+      { title: "Special Protection Areas (England)",
+        shortName: "Special Protection Areas (SPAs)",
+        nameField: "SPA_NAME", type: "statutory", maxList: 4 },
+
+      { title: "Ramsar (England)",
+        shortName: "Ramsar wetland sites",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      { title: "National Nature Reserves (England)",
+        shortName: "National Nature Reserves (NNRs)",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      { title: "Local Nature Reserves (England)",
+        shortName: "Local Nature Reserves (LNRs)",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      { title: "Areas of Outstanding Natural Beauty (England)",
+        shortName: "Areas of Outstanding Natural Beauty (AONBs)",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      { title: "National Parks (England)",
+        shortName: "National Parks",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      // ── Wales: statutory designations (DataMapWales WFS) ─────────────────
+      { title: "SSSI",
+        shortName: "Sites of Special Scientific Interest (SSSIs) (Wales)",
+        nameField: "sssi_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_SSSI",
+        wfsNameFields: ["sssi_name","name","NAME"],
+        wfsAreaField: "cartesian_area_ha" },
+
+      { title: "SAC",
+        shortName: "Special Areas of Conservation (SACs) (Wales)",
+        nameField: "sac_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_SAC",
+        wfsNameFields: ["sac_name","name","NAME"] },
+
+      { title: "SPA",
+        shortName: "Special Protection Areas (SPAs) (Wales)",
+        nameField: "spa_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_SPA",
+        wfsNameFields: ["spa_name","name","NAME"] },
+
+      { title: "RAMSAR",
+        shortName: "Ramsar wetland sites (Wales)",
+        nameField: "ramsar_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_RAMSAR",
+        wfsNameFields: ["ramsar_name","name","NAME"] },
+
+      { title: "NNR",
+        shortName: "National Nature Reserves (NNRs) (Wales)",
+        nameField: "nnr_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_NNR",
+        wfsNameFields: ["nnr_name","name","NAME"] },
+
+      { title: "LNR",
+        shortName: "Local Nature Reserves (LNRs) (Wales)",
+        nameField: "lnr_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_LNR",
+        wfsNameFields: ["lnr_name","name","NAME"] },
+
+      { title: "AONB",
+        shortName: "Areas of Outstanding Natural Beauty (AONBs) (Wales)",
+        nameField: "aonb_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_AONB",
+        wfsNameFields: ["aonb_name","name","NAME"] },
+
+      { title: "National Park",
+        shortName: "National Parks (Wales)",
+        nameField: "np_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_NATIONAL_PARK",
+        wfsNameFields: ["np_name","national_park_name","name","NAME"] },
+
+      // ── England: habitats ─────────────────────────────────────────────────
+      { title: "Ancient Woodland (England)",
+        shortName: "ancient woodland",
+        nameField: "NAME", statusField: "THEMNAME", type: "habitat", maxList: 4 },
+
+      { title: "Priority Habitats Inventory (England)",
+        shortName: "Priority Habitat Inventory parcels",
+        nameField: "MainHabs", type: "habitat",
+        groupByField: true, maxList: 6 },
+
+      // ── Wales: habitats (DataMapWales WFS) ───────────────────────────────
+      { title: "Ancient Woodland",
+        shortName: "ancient woodland (Wales)",
+        nameField: "name", type: "habitat", wfs: true,
+        wfsType: "inspire-nrw:NRW_ANCIENT_WOODLAND_INVENTORY_2021",
+        wfsNameFields: ["woodland_name","name","NAME","site_name"] },
+
+      { title: "Priority Habitats - High sensitivity (Wales)",
+        shortName: "Priority Habitats of high sensitivity (Wales)",
+        nameField: "habitat", type: "habitat", wfs: true,
+        wfsType: "geonode:gwc21_priority_habitat_high_sensitivity",
+        wfsNameFields: ["habitat","habitat_type","main_habitat","hab_type","phase1","description","name","NAME"],
+        groupByField: true },
+
+      // ── River habitats ────────────────────────────────────────────────────
+      { title: "Priority River Habitat - Rivers (England)",
+        shortName: "Priority River Habitat — Rivers",
+        nameField: null, type: "river" },
+
+      { title: "Priority River Habitat - Headwater Areas (England)",
+        shortName: "Priority River Habitat — Headwater Areas",
+        nameField: null, type: "river" },
+
+      { title: "Chalk Rivers (England)",
+        shortName: "Chalk Rivers",
+        nameField: null, type: "river" },
+
+      { title: "EA Statutory Rivers",
+        shortName: "EA Statutory Rivers",
+        nameField: null, type: "river", lengthField: "LENGTH_KM" },
+
+      // ── Bat consultation zones (individual layers within group) ───────────
+      { title: "Wiltshire",
+        shortName: "Bat Consultation Zone — Wiltshire",
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
+
+      { title: "Trowbirdge SPD",
+        shortName: "Bat Consultation Zone — Trowbridge SPD",
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
+
+      { title: "North Somerset and Mendips",
+        shortName: "Bat Consultation Zone — North Somerset and Mendips",
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
+
+      { title: "Hestercombe House",
+        shortName: "Bat Consultation Zone — Hestercombe House",
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
+
+      { title: "Exmoor and Quantocks",
+        shortName: "Bat Consultation Zone — Exmoor and Quantocks",
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
+
+      { title: "Mells Valley",
+        shortName: "Bat Consultation Zone — Mells Valley",
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
+
+      // ── Biodiversity records ──────────────────────────────────────────────
+      { title: "iNaturalist Observations",
+        shortName: "iNaturalist biodiversity observations",
+        nameField: "common_name", latinField: "scientific_name", type: "records", maxList: 5 },
+
+      { title: "C&W In-house Records",
+        shortName: "C&W in-house biodiversity records",
+        nameField: "Common_Name", latinField: "Latin_Name", type: "records", maxList: 5 },
+
+      // Local Authority Districts — used for planning policy + BAP links
+      { title: "Local Authority Districts (2022)",
+        shortName: "Local Authority District",
+        nameField: "LAD22NM", type: "lad" },
+    ],
+
+    // ── Local Authority link lookup ────────────────────────────────────────
+    // Keys are LAD22NM values (case-insensitive match used).
+    // localPlan: URL to the authority's Local Plan page
+    // bap: URL to the relevant LERC or LNP biodiversity action plan
+    ladLinks: {
+      "Bath and North East Somerset": {
+        localPlan: "https://www.bathnes.gov.uk/local-plan",
+        bap: "https://www.avonwildlifetrust.org.uk/" },
+      "Bristol, City of": {
+        localPlan: "https://www.bristol.gov.uk/residents/planning-and-building-regulations/planning-policy-and-guidance/local-plan",
+        bap: "https://www.avonwildlifetrust.org.uk/" },
+      "North Somerset": {
+        localPlan: "https://n-somerset.gov.uk/my-services/planning-building-control/planning-policy/our-local-plan",
+        bap: "https://www.avonwildlifetrust.org.uk/" },
+      "Somerset": {
+        localPlan: "https://www.somerset.gov.uk/planning-buildings-and-land/somerset-local-plan/",
+        bap: "https://www.somersetwildlife.org/nature-recovery" },
+      "South Gloucestershire": {
+        localPlan: "https://beta.southglos.gov.uk/new-local-plan/",
+        bap: "https://www.avonwildlifetrust.org.uk/" },
+      "Wiltshire": {
+        localPlan: "https://www.wiltshire.gov.uk/planning-policy",
+        bap: "https://www.wiltshirewildlife.org/nature-recovery-network" },
+      "Swindon": {
+        localPlan: "https://www.swindon.gov.uk/info/20044/local_plan",
+        bap: "https://www.wiltshirewildlife.org/nature-recovery-network" },
+      "Dorset": {
+        localPlan: "https://www.dorsetcouncil.gov.uk/planning-buildings-land/planning-policy",
+        bap: "https://www.dorsetwildlifetrust.org.uk/nature-recovery" },
+      "Bournemouth, Christchurch and Poole": {
+        localPlan: "https://www.bcpcouncil.gov.uk/planning/planning-policy/local-plan",
+        bap: "https://www.dorsetwildlifetrust.org.uk/nature-recovery" },
+      "Hampshire": {
+        localPlan: "https://www.hants.gov.uk/landplanningandenvironment/strategic-planning/local-plan",
+        bap: "https://www.hiwwt.org.uk/conservation/nature-recovery" },
+      "Gloucestershire": {
+        localPlan: "https://www.gloucestershire.gov.uk/planning-and-environment/planning-policy/",
+        bap: "https://www.gloucestershirewildlifetrust.co.uk/nature-recovery" },
+      "Oxfordshire": {
+        localPlan: "https://www.oxfordshire.gov.uk/residents/environment-and-planning/planning/local-plans",
+        bap: "https://www.bbowt.org.uk/nature-recovery" },
+      "Cardiff": {
+        localPlan: "https://www.cardiff.gov.uk/ENG/resident/Planning/Planning-policy/Local-Development-Plan/Pages/Local-Development-Plan.aspx",
+        bap: "https://www.glamorganwildlife.org/nature-recovery" },
+      "Vale of Glamorgan": {
+        localPlan: "https://www.valeofglamorgan.gov.uk/en/our_services/planning/planning_policy/local_development_plan.aspx",
+        bap: "https://www.glamorganwildlife.org/nature-recovery" },
+    },
+  };
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── Auth ─────────────────────────────────────────────────────────────────
+  if (CONFIG.appId) {
+    const info = new OAuthInfo({
+      appId: CONFIG.appId,
+      portalUrl: CONFIG.portalUrl,
+      popup: false,
+    });
+    IdentityManager.registerOAuthInfos([info]);
+
+    // Check sign-in state; redirect to login if not authenticated
+    IdentityManager.checkSignInStatus(CONFIG.portalUrl + "/sharing")
+      .catch(() => IdentityManager.getCredential(CONFIG.portalUrl + "/sharing"));
+  }
+
+  // ── Map & View ────────────────────────────────────────────────────────────
+  const webMap = new WebMap({ portalItem: { id: CONFIG.webMapId, portal: { url: CONFIG.portalUrl } } });
+  const view = new MapView({
+    container: "viewDiv",
+    map: webMap,
+    ui: { components: ["zoom", "compass", "attribution"] },
+    popup: { dockEnabled: false },  // allow popups on map click; suppressed programmatically during RLB search
+  });
+
+  // Once the map loads, build the layer panel and load Word export library
+  // Note: we do NOT force layer visibility — the map's default state is preserved.
+  // Layers are queried via their REST endpoints regardless of visibility.
+  // ── JNCC protected species lookup ────────────────────────────────────────
+  // Loaded once on startup; maps lowercase name → {designations, category, taxonGroup}
+  let jnccLookup = null;   // null = not loaded yet; {} = loaded (may be empty on error)
+  let jnccLoading = false;
+
+  const JNCC_URL = "jncc.xlsx"; // hosted in same GitHub repo — no CORS issues
+
+  // Reporting categories we want to flag
+  const PROTECTED_CATEGORIES = [
+    "Wildlife and Countryside Act 1981",
+    "NERC Act S41 (England)",
+    "NERC Act S42 (Wales)",
+    "The Conservation of Habitats and Species Regulations",  // covers 2010 and 2017 versions
+    "Protection of Badgers Act 1992",
+    "Habitats Directive",
+    // Note: "Birds Directive" deliberately excluded
+  ];
+
+  // Birds of Conservation Concern 5 — include Red and Amber listed birds
+  const BOCC5_MATCH = /birds of conservation concern 5|bocc5|bocc 5/i;
+  const BOCC5_STATUSES = ["red", "amber"];
+
+  function setJnccStatus(msg, type) {
+    const el = document.getElementById("jnccStatus");
+    if (!el) return;
+    const styles = {
+      loading: "background:#f0f7ff;border-color:#b8d4f0;color:#1a5da0",
+      ok:      "background:#f0faf3;border-color:#c9dece;color:#1a3d2b",
+      warn:    "background:#fffbea;border-color:#f0d060;color:#6b5200",
+      error:   "background:#fff0f0;border-color:#f5c0c0;color:#c00",
+    };
+    el.style.cssText = `font-size:10px;padding:5px 8px;margin-bottom:8px;border-radius:4px;border:1px solid;${styles[type]||styles.loading}`;
+    el.textContent = msg;
+  }
+
+  let jnccPromiseRef = null; // single shared promise for concurrent callers
+
+  async function loadJncc() {
+    if (jnccLookup !== null) return;   // already loaded
+    if (jnccPromiseRef) return jnccPromiseRef; // already loading — return same promise
+    jnccPromiseRef = _doLoadJncc();
+    return jnccPromiseRef;
+  }
+
+  async function _doLoadJncc() {
+    jnccLoading = true;
+
+    // Wait for SheetJS to be available
+    setJnccStatus("⏳ Waiting for SheetJS…", "loading");
+    let waited = 0;
+    while (!(window.XLSX && window.XLSX.read) && waited < 15000) {
+      await new Promise(r => setTimeout(r, 300));
+      waited += 300;
+    }
+    const xlsxLib = window.XLSX;
+    if (!xlsxLib || !xlsxLib.read) {
+      setJnccStatus("✗ SheetJS library did not expose XLSX.read. Species cross-referencing unavailable.", "error");
+      jnccLookup = {};
+      jnccLoading = false;
+      return;
+    }
+
+    try {
+      setJnccStatus("⏳ Fetching JNCC species data (7MB)…", "loading");
+      const resp = await fetch(JNCC_URL);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} — is jncc.xlsx in the GitHub repo?`);
+
+      setJnccStatus("⏳ Parsing spreadsheet…", "loading");
+      const buf  = await resp.arrayBuffer();
+      const wb   = xlsxLib.read(buf, { type: "array" });
+
+      // "Summary of Each Taxon" sheet — headers are on row 5 (index 4)
+      // Prefer this over Master List as it has one row per taxon
+      const summarySheet = wb.SheetNames.find(n => /summary/i.test(n));
+      const masterSheet  = wb.SheetNames.find(n => /master/i.test(n));
+      const sheetName    = summarySheet || masterSheet || wb.SheetNames[0];
+      const isSummary    = !!summarySheet && sheetName === summarySheet;
+
+      console.log("JNCC: sheets:", wb.SheetNames, "| using:", sheetName, "| isSummary:", isSummary);
+      setJnccStatus(`⏳ Parsing sheet: "${sheetName}"…`, "loading");
+
+      const raw = xlsxLib.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "" });
+
+      // For Summary sheet, headers are always on row 5 (index 4)
+      // For Master List, scan for the header row
+      let headerRowIdx = -1;
+      if (isSummary) {
+        headerRowIdx = 4; // row 5 in Excel = index 4
+      } else {
+        for (let i = 0; i < Math.min(raw.length, 50); i++) {
+          const cells = raw[i].map(c => String(c).trim()).filter(Boolean);
+          const rowStr = cells.join("|").toLowerCase();
+          if (/recommended taxon|taxon name/i.test(rowStr) &&
+              /reporting category|designation|wca/i.test(rowStr) &&
+              cells.length >= 3) {
+            headerRowIdx = i;
+            break;
+          }
+        }
+      }
+      if (headerRowIdx === -1) throw new Error(`No header row found in "${sheetName}"`);
+
+      const headers = raw[headerRowIdx].map(h => String(h).trim());
+      const rows = raw.slice(headerRowIdx + 1).map(r => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = r[i] !== undefined ? r[i] : ""; });
+        return obj;
+      }).filter(r => Object.values(r).some(v => String(v).trim() !== ""));
+
+      console.log(`JNCC: header row ${headerRowIdx}, ${rows.length} data rows`);
+      console.log("JNCC: ALL headers:", headers.join(" | "));
+      console.log("JNCC: sample row:", JSON.stringify(rows[0]).slice(0, 300));
+
+      setJnccStatus(`⏳ Building lookup (${rows.length} rows)…`, "loading");
+
+      const lookup = {};
+      const isSummarySheet = isSummary;
+
+      if (isSummarySheet) {
+        // Summary sheet columns (from actual spreadsheet):
+        // Recommended_taxon_name, Common_name, Taxon_group
+        // Designation cols prefixed like "C: Birds Directive", "D: Habitats Directive",
+        // "O: WCA Sch 1", "P: WCA Sch 5", "Q: WCA Sch 8",
+        // "AD: Habitats and Species Regulations 2017 Sch 2",
+        // "AE: Habitats and Species Regulations 2017 Sch 4",
+        // "BF: Protection of Badgers Act", "EE: NERC Act S41", "EF: NERC Act S42",
+        // "GB: Birds of Conservation Concern 5" (value = Red / Amber / Green)
+
+        const latinCol  = headers.find(h => /^Recommended_taxon_name$/i.test(h) || /recommended.*taxon.*name/i.test(h));
+        const commonCol = headers.find(h => /^Common_name$/i.test(h) || /common.?name/i.test(h));
+        // Taxon group is in the first column (the "For further details..." note column)
+        const groupCol  = headers[0];
+
+        // Map each designation column to a label function
+        // We pattern-match on the column header value
+        const desigCols = [];
+        headers.forEach(h => {
+          const hl = h.toLowerCase();
+          // Skip identity/admin columns
+          if (/recommended|common_name|taxon_group|authority|qualifier|version|sort|note|for further/i.test(h)) return;
+
+          if (/wca.*sch.*1|wca.*schedule.*1|sch.*1.*wca/i.test(hl))
+            desigCols.push({ h, prefix: "WCA 1981 Sch.1", label: (v) => cleanLegislationLabel("WCA 1981 Sch.1", v) });
+          else if (/wca.*sch.*5|wca.*schedule.*5|sch.*5.*wca/i.test(hl))
+            desigCols.push({ h, prefix: "WCA 1981 Sch.5", label: (v) => cleanLegislationLabel("WCA 1981 Sch.5", v) });
+          else if (/wca.*sch.*8|wca.*schedule.*8|sch.*8.*wca/i.test(hl))
+            desigCols.push({ h, prefix: "WCA 1981 Sch.8", label: (v) => cleanLegislationLabel("WCA 1981 Sch.8", v) });
+          else if (/wildlife.*countryside|wca/i.test(hl) && !/birds/i.test(hl))
+            desigCols.push({ h, prefix: "WCA 1981", label: (v) => cleanLegislationLabel("WCA 1981", v) });
+          else if (/habitats.*species.*reg.*sch.*2|hab.*reg.*sch.*2/i.test(hl))
+            desigCols.push({ h, prefix: "Hab. Regs. Sch.2", label: (v) => cleanLegislationLabel("Hab. Regs. Sch.2", v) });
+          else if (/habitats.*species.*reg.*sch.*4|hab.*reg.*sch.*4/i.test(hl))
+            desigCols.push({ h, prefix: "Hab. Regs. Sch.4", label: (v) => cleanLegislationLabel("Hab. Regs. Sch.4", v) });
+          else if (/habitats.*species.*reg.*sch.*5|hab.*reg.*sch.*5/i.test(hl))
+            desigCols.push({ h, prefix: "Hab. Regs. Sch.5", label: (v) => cleanLegislationLabel("Hab. Regs. Sch.5", v) });
+          else if (/habitats.*species.*reg|hab.*reg|conservation.*habitat.*reg/i.test(hl))
+            desigCols.push({ h, prefix: "Hab. Regs.", label: (v) => cleanLegislationLabel("Hab. Regs.", v) });
+          // Habitats Directive excluded deliberately
+          else if (/nerc.*s41|s41.*england|principal.*england/i.test(hl))
+            desigCols.push({ h, prefix: "NERC S.41", label: () => "NERC S.41" });
+          else if (/nerc.*s42|s42.*wales|principal.*wales/i.test(hl))
+            desigCols.push({ h, prefix: "NERC S.42", label: () => "NERC S.42" });
+          else if (/badger/i.test(hl))
+            desigCols.push({ h, prefix: "Badgers Act 1992", label: () => "Badgers Act 1992" });
+          else if (/birds.*conservation.*concern.*5|bocc.*5|bocc5/i.test(hl) ||
+                   /red data categor.*birds|fd.*red data.*birds/i.test(hl))
+            desigCols.push({ h, prefix: "BoCC5", label: (v) => `BoCC5 ${v.charAt(0).toUpperCase()+v.slice(1).toLowerCase()} List`, filter: (v) => /red|amber/i.test(v) });
+          else if (/biodiversity.*list.*england|hb.*biodiversity/i.test(hl))
+            desigCols.push({ h, prefix: "NERC S.41", label: () => "NERC S.41", filter: (v) => !!v && v !== "0" && v !== "N" });
+          // Birds Directive excluded deliberately
+        });
+
+        // Consolidates "WCA 1981 Sch.5 WACA-Sch5_sect9.4b, WACA-Sch5_sect9.4c" into
+        // "WCA 1981 Sch.5 Sect.9.4b, 9.4c"
+        function cleanLegislationLabel(prefix, rawVal) {
+          if (!rawVal || rawVal === "Y" || rawVal === "1") return prefix;
+          // Extract section references — numbers/letters after "sect" or "section"
+          const sects = rawVal.split(/[,;]+/).map(s => {
+            const m = s.match(/sect[\._]?([\d\.]+[a-z]*)/i);
+            return m ? `Sect.${m[1]}` : s.trim();
+          }).filter(Boolean);
+          const unique = [...new Set(sects)].sort();
+          return unique.length ? `${prefix} ${unique.join(", ")}` : prefix;
+        }
+
+        console.log("JNCC desig cols found:", desigCols.map(d => d.h).join(" | "));
+        console.log("JNCC latinCol:", latinCol, "commonCol:", commonCol, "groupCol:", groupCol);
+
+        rows.forEach(row => {
+          const latinName = String(row[latinCol] || "").trim().toLowerCase();
+          const comName   = String(row[commonCol] || "").trim().toLowerCase();
+          // First column contains taxon group in format "common group name (Kingdom)"
+          // Extract just the group name before the parenthesis
+          const rawGroup  = String(row[groupCol] || "").trim();
+          const taxGroup  = rawGroup.replace(/\s*\([^)]*\)\s*$/, "").trim() || rawGroup;
+          if (!latinName || latinName === "recommended_taxon_name") return;
+
+          const designations = new Set();
+          // Group by prefix first to consolidate e.g. multiple WCA Sch.5 sub-entries
+          const byPrefix = {};
+          desigCols.forEach(({ h, prefix, label, filter }) => {
+            const val = String(row[h] || "").trim();
+            if (!val || val === "0" || val === "N") return;
+            if (filter && !filter(val)) return;
+            const resolved = label(val);
+            const key = prefix || resolved;
+            if (!byPrefix[key]) byPrefix[key] = [];
+            byPrefix[key].push(resolved);
+          });
+          // For each prefix group, merge sect refs if multiple
+          Object.entries(byPrefix).forEach(([prefix, labels]) => {
+            if (labels.length === 1) {
+              designations.add(labels[0]);
+            } else {
+              // Extract all sect refs and combine under prefix
+              const allSects = labels.flatMap(l => {
+                const parts = l.replace(prefix, "").trim().split(/,\s*/);
+                return parts.filter(Boolean);
+              });
+              const unique = [...new Set(allSects)].sort();
+              designations.add(unique.length ? `${prefix} ${unique.join(", ")}` : prefix);
+            }
+          });
+
+          if (designations.size === 0) return;
+          [latinName, comName].filter(Boolean).forEach(key => {
+            if (!lookup[key]) lookup[key] = { taxonGroup: taxGroup, designations: new Set() };
+            designations.forEach(d => lookup[key].designations.add(d));
+          });
+        });
+
+      } else {
+        // Master List sheet: one row per taxon-designation combination
+        rows.forEach(row => {
+          const repCat  = String(row["Reporting category"] || row["reporting category"] || "").trim();
+          const desig   = String(row["Designation"] || row["designation"] || row["Status"] || "").trim().toLowerCase();
+          const taxName = String(row["Recommended taxon name"] || row["Taxon name"] || "").trim().toLowerCase();
+          const comName = String(row["Common name"] || "").trim().toLowerCase();
+          const taxGroup= String(row["Taxon group"] || "").trim();
+
+          const isProtected = PROTECTED_CATEGORIES.some(c => repCat.includes(c));
+          const isBoCC5 = BOCC5_MATCH.test(repCat) && /red|amber/i.test(desig);
+          if (!isProtected && !isBoCC5) return;
+
+          const rawDesig = String(row["Designation"] || row["Status"] || "").trim();
+          let designLabel;
+          if (isBoCC5) {
+            designLabel = `BoCC5 ${desig.charAt(0).toUpperCase() + desig.slice(1).toLowerCase()} List`;
+          } else if (repCat.includes("Wildlife and Countryside Act 1981")) {
+            designLabel = rawDesig ? `WCA 1981 ${rawDesig}` : "WCA 1981";
+          } else if (repCat.includes("Conservation of Habitats and Species Regulations")) {
+            designLabel = rawDesig ? `Hab. Regs. ${rawDesig}` : "Hab. Regs.";
+          } else if (repCat.includes("Habitats Directive")) {
+            designLabel = rawDesig ? `Hab. Dir. ${rawDesig}` : "Hab. Dir.";
+          } else {
+            designLabel = repCat
+              .replace("Protection of Badgers Act 1992", "Badgers Act 1992")
+              .replace("NERC Act S41 (England)", "NERC S41")
+              .replace("NERC Act S42 (Wales)", "NERC S42");
+          }
+
+          [taxName, comName].filter(Boolean).forEach(key => {
+            if (!lookup[key]) lookup[key] = { taxonGroup: taxGroup, designations: new Set() };
+            lookup[key].designations.add(designLabel.trim());
+          });
+        });
+      }
+
+      Object.values(lookup).forEach(v => { v.designations = [...v.designations].sort(); });
+      jnccLookup = lookup;
+      const n = Object.keys(lookup).length;
+
+      // Quick sanity check — find any BoCC5 entries to confirm matching worked
+      const bocc5Sample = Object.entries(lookup)
+        .filter(([k,v]) => v.designations.some(d => d.includes("BoCC5")))
+        .slice(0,3).map(([k]) => k).join(", ");
+
+      if (n === 0) {
+        const hdrSample = headers.slice(0, 8).join(" | ");
+        const rowSample = rows[0] ? JSON.stringify(rows[0]).slice(0, 200) : "no data rows";
+        setJnccStatus(`✗ 0 taxa. Hdr row ${headerRowIdx}: ${hdrSample} || Data: ${rowSample}`, "error");
+      } else {
+        setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa. BoCC5: ${bocc5Sample || "none"}`, "ok");
+      }
+
+    } catch(e) {
+      setJnccStatus(`✗ Species data failed: ${e.message}`, "error");
+      jnccLookup = {};
+    }
+    jnccLoading = false;
+  }
+
+  function lookupSpecies(name) {
+    if (!jnccLookup) return null;
+    return jnccLookup[name.toLowerCase().trim()] || null;
+  }
+
+  view.when(() => {
+    buildLayerPanel();
+    buildBufferGroups();
+  });
+
+  // ── Layer panel ───────────────────────────────────────────────────────────
+  window.toggleLayerPanel = function() {
+    const panel = document.getElementById("layerPanel");
+    const btn   = document.getElementById("layerToggleBtn");
+    panel.classList.toggle("open");
+    btn.classList.toggle("active");
+  };
+
+  function buildLayerPanel() {
+    const body = document.getElementById("layerPanelBody");
+    body.innerHTML = "";
+
+    // Render layers in reverse so top layers appear first (matches map draw order)
+    const allLayers = webMap.layers.toArray().slice().reverse();
+    allLayers.forEach(layer => renderLayerRow(layer, body, 0));
+  }
+
+  function renderLayerRow(layer, container, depth) {
+    const isGroup = layer.type === "group";
+    const isWms   = layer.type === "wms" || layer.type === "wmts";
+
+    if (isGroup) {
+      // ── Group row ──────────────────────────────────────────────
+      const groupDiv = document.createElement("div");
+
+      const row = document.createElement("div");
+      row.className = "lp-group-row";
+
+      const chevron = document.createElement("span");
+      chevron.className = "lp-chevron open";
+      chevron.textContent = "▶";
+
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.className = "lp-group-check";
+      check.checked = layer.visible;
+      check.addEventListener("change", e => {
+        e.stopPropagation();
+        layer.visible = check.checked;
+        // Sync child checkboxes
+        children.querySelectorAll("input[type=checkbox]").forEach(cb => {
+          cb.checked = check.checked;
+        });
+        // Sync child layer visibility
+        if (layer.layers) layer.layers.forEach(l => l.visible = check.checked);
+      });
+
+      const label = document.createElement("span");
+      label.className = "lp-group-label";
+      label.textContent = layer.title;
+
+      row.appendChild(chevron);
+      row.appendChild(check);
+      row.appendChild(label);
+
+      const children = document.createElement("div");
+      children.className = "lp-children open";
+
+      // Toggle expand/collapse on row click (not checkbox)
+      row.addEventListener("click", e => {
+        if (e.target === check) return;
+        children.classList.toggle("open");
+        chevron.classList.toggle("open");
+      });
+
+      groupDiv.appendChild(row);
+      groupDiv.appendChild(children);
+      container.appendChild(groupDiv);
+
+      // Render children in reverse order
+      if (layer.layers) {
+        const childArr = layer.layers.toArray().slice().reverse();
+        childArr.forEach(child => renderLayerRow(child, children, depth + 1));
+      }
+
+    } else {
+      // ── Leaf layer row ─────────────────────────────────────────
+      const row = document.createElement("div");
+      row.className = "lp-layer-row" + (isWms ? " wms" : "");
+      row.style.paddingLeft = (14 + depth * 14) + "px";
+
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.className = "lp-layer-check";
+      check.checked = layer.visible;
+      check.addEventListener("change", () => { layer.visible = check.checked; });
+
+      // Colour swatch — try to get renderer colour
+      const swatch = document.createElement("span");
+      swatch.className = "lp-layer-swatch";
+      try {
+        const sym = layer.renderer?.symbol || layer.renderer?.defaultSymbol;
+        const col = sym?.color;
+        if (col) swatch.style.background = `rgba(${col.r},${col.g},${col.b},${col.a ?? 1})`;
+        else swatch.style.background = "#aaa";
+      } catch(e) { swatch.style.background = "#aaa"; }
+
+      const label = document.createElement("span");
+      label.className = "lp-layer-label";
+      label.textContent = layer.title + (isWms ? " (WMS)" : "");
+
+      row.appendChild(check);
+      row.appendChild(swatch);
+      row.appendChild(label);
+
+      // Clicking the row (not checkbox) also toggles
+      row.addEventListener("click", e => {
+        if (e.target === check) return;
+        check.checked = !check.checked;
+        layer.visible = check.checked;
+      });
+
+      container.appendChild(row);
+    }
+  }
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  let clickHandler  = null;
+  let selectedGeom  = null;
+  let bufferGraphic = null;
+
+  // ── Draw layer + SketchViewModel ─────────────────────────────────────────
+  const drawLayer = new GraphicsLayer({ listMode: "hide" });
+  view.map.add(drawLayer);
+  let sketchVM = null;
+
+  function getSketchVM() {
+    if (!sketchVM) {
+      sketchVM = new SketchViewModel({
+        view,
+        layer: drawLayer,
+        polygonSymbol: {
+          type: "simple-fill",
+          color: [220, 30, 30, 0.1],
+          outline: { color: [220, 30, 30, 1], width: 2 },
+        },
+        updateOnGraphicClick: false,
+      });
+      sketchVM.on("create", e => {
+        if (e.state === "complete") {
+          const geom = e.graphic.geometry;
+          selectedGeom = geom;
+          document.getElementById("btnDraw").classList.remove("drawing");
+          document.getElementById("btnDraw").classList.add("selected");
+          document.getElementById("btnDrawLabel").textContent = "✓ Boundary drawn";
+          document.getElementById("btnSelect").classList.remove("selected", "selecting");
+          document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
+          document.getElementById("btnRun").disabled = false;
+          setStatus("info", "✓ Boundary drawn — ready to run desk study.");
+          view.cursor = "default";
+        }
+      });
+    }
+    return sketchVM;
+  }
+
+  window.startDraw = function() {
+    // Cancel any active click-selection
+    if (clickHandler) { clickHandler.remove(); clickHandler = null; }
+    document.getElementById("btnSelect").classList.remove("selecting", "selected");
+    document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
+    document.getElementById("selectOverlay").classList.remove("active");
+
+    // Clear any existing drawn geometry
+    drawLayer.removeAll();
+    selectedGeom = null;
+    document.getElementById("btnRun").disabled = true;
+
+    document.getElementById("btnDraw").classList.add("drawing");
+    document.getElementById("btnDraw").classList.remove("selected");
+    document.getElementById("btnDrawLabel").textContent = "Drawing… (click to place points, double-click to finish)";
+    setStatus("info", "Click to place polygon vertices. Double-click to complete the boundary.");
+    view.cursor = "crosshair";
+
+    getSketchVM().create("polygon", { mode: "click" });
+  };
+
+  // ── Buffer group state ────────────────────────────────────────────────────
+  // layerAssignments maps cfg.title → category key
+  const layerAssignments = {};
+
+  const BUFFER_GROUPS = [
+    { key: "international", label: "International",  badgeClass: "badge-intl-sm",  inputId: "bufIntl",  defaultKm: 4 },
+    { key: "national",      label: "National",       badgeClass: "badge-natl-sm",  inputId: "bufNatl",  defaultKm: 2 },
+    { key: "local",         label: "Local",          badgeClass: "badge-local-sm", inputId: "bufLocal", defaultKm: 2 },
+    { key: "records",       label: "Records",        badgeClass: "badge-rec-sm",   inputId: "bufRec",   defaultKm: 1 },
+  ];
+
+  function defaultCategory(cfg) {
+    if (cfg.type === "records") return "records";
+    if (cfg.type === "bat") return "national";
+    if (cfg.type === "lad") return "national"; // uses centroid anyway, not buffer
+    if (cfg.type === "river" || cfg.type === "habitat") return "national";
+    if (cfg.type === "statutory") {
+      const imp = designationImportance(cfg.shortName);
+      if (imp === "International") return "international";
+      if (imp === "Local") return "local";
+      return "national";
+    }
+    return "national";
+  }
+
+  function buildBufferGroups() {
+    // Initialise assignments from defaults
+    CONFIG.layers.forEach(cfg => {
+      if (!cfg.wms) layerAssignments[cfg.title] = defaultCategory(cfg);
+    });
+
+    const container = document.getElementById("bufferGroups");
+    container.innerHTML = "";
+
+    BUFFER_GROUPS.forEach(grp => {
+      const groupEl = document.createElement("div");
+      groupEl.className = "buf-group";
+      groupEl.dataset.key = grp.key;
+
+      // Header row
+      const header = document.createElement("div");
+      header.className = "buf-group-header";
+      header.innerHTML = `
+        <span class="buf-chevron">▶</span>
+        <span class="buf-badge ${grp.badgeClass}">${grp.label}</span>
+        <input class="buf-input" id="${grp.inputId}" type="number"
+          value="${grp.defaultKm}" min="0.1" max="20" step="0.5"/>
+        <span class="buf-km">km</span>`;
+
+      const chevron = header.querySelector(".buf-chevron");
+      const layersDiv = document.createElement("div");
+      layersDiv.className = "buf-layers";
+      layersDiv.dataset.key = grp.key;
+
+      // Toggle expand/collapse
+      header.addEventListener("click", e => {
+        if (e.target.classList.contains("buf-input")) return;
+        layersDiv.classList.toggle("open");
+        chevron.classList.toggle("open");
+      });
+
+      // Drag-over highlighting
+      layersDiv.addEventListener("dragover", e => {
+        e.preventDefault();
+        layersDiv.classList.add("drag-over");
+      });
+      layersDiv.addEventListener("dragleave", () => layersDiv.classList.remove("drag-over"));
+      layersDiv.addEventListener("drop", e => {
+        e.preventDefault();
+        layersDiv.classList.remove("drag-over");
+        const title = e.dataTransfer.getData("text/plain");
+        if (title && layerAssignments[title] !== grp.key) {
+          layerAssignments[title] = grp.key;
+          refreshChips();
+        }
+      });
+
+      groupEl.appendChild(header);
+      groupEl.appendChild(layersDiv);
+      container.appendChild(groupEl);
+    });
+
+    refreshChips();
+  }
+
+  function refreshChips() {
+    // Clear all chip containers
+    document.querySelectorAll(".buf-layers").forEach(d => d.innerHTML = "");
+
+    CONFIG.layers.forEach(cfg => {
+      if (cfg.wms) return; // WMS layers not queryable — skip
+      if (cfg.type === "lad") return; // LAD layer doesn't need a buffer distance chip
+      if (cfg.wfs) { layerAssignments[cfg.title] = defaultCategory(cfg); }
+      const cat = layerAssignments[cfg.title] || defaultCategory(cfg);
+      const container = document.querySelector(`.buf-layers[data-key="${cat}"]`);
+      if (!container) return;
+
+      const chip = document.createElement("div");
+      chip.className = "layer-chip";
+      chip.draggable = true;
+      chip.innerHTML = `<span class="chip-drag">⠿</span>${cfg.title.replace(/ \(England\)| \(Wales\)/g,"").trim()}`;
+      chip.title = cfg.title;
+
+      chip.addEventListener("dragstart", e => {
+        e.dataTransfer.setData("text/plain", cfg.title);
+        chip.classList.add("dragging");
+      });
+      chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+
+      container.appendChild(chip);
+    });
+  }
+
+  // ── Buffer helpers ────────────────────────────────────────────────────────
+  function getBuffers() {
+    const vals = {};
+    BUFFER_GROUPS.forEach(g => {
+      vals[g.key] = parseFloat(document.getElementById(g.inputId)?.value) || g.defaultKm;
+    });
+    return vals;
+  }
+
+  // ── Selection ─────────────────────────────────────────────────────────────
+  window.startSelection = function() {
+    resetState(false);
+    // Cancel any in-progress draw
+    if (sketchVM) { try { sketchVM.cancel(); } catch(e) {} }
+    drawLayer.removeAll();
+    document.getElementById("btnDraw").classList.remove("drawing", "selected");
+    document.getElementById("btnDrawLabel").textContent = "Draw red line boundary";
+    setStatus("selecting");
+    document.getElementById("btnSelect").classList.add("selecting");
+    document.getElementById("btnSelectLabel").textContent = "Click boundary on map…";
+    document.getElementById("selectOverlay").classList.add("active");
+    view.cursor = "crosshair";
+
+    if (clickHandler) clickHandler.remove();
+    clickHandler = view.on("click", async event => {
+      // Suppress default popup during selection mode
+      event.stopPropagation();
+      view.popup.close();
+
+      // Find red line layers recursively through groups
+      const redLayers = [];
+      function collectRedLayers(layers) {
+        layers.forEach(l => {
+          if (CONFIG.redLineTitlePattern.test(l.title)) redLayers.push(l);
+          if (l.type === "group" && l.layers) collectRedLayers(l.layers);
+        });
+      }
+      collectRedLayers(webMap.layers);
+
+      const hitResult = await view.hitTest(event, { include: redLayers.length ? redLayers : undefined });
+      const hit = hitResult.results.find(r => r.graphic && r.graphic.geometry);
+
+      if (!hit) {
+        setStatus("error", "No boundary feature found at that location. Try clicking directly on the red line.");
+        endSelection();
+        return;
+      }
+
+      selectedGeom = hit.graphic.geometry;
+      endSelection();
+      setStatus("info", "✓ Boundary selected — ready to run screening.");
+      document.getElementById("btnSelect").classList.add("selected");
+      document.getElementById("btnSelectLabel").textContent = "✓ Boundary selected";
+      document.getElementById("btnRun").disabled = false;
+    });
+  };
+
+  function endSelection() {
+    if (clickHandler) { clickHandler.remove(); clickHandler = null; }
+    document.getElementById("btnSelect").classList.remove("selecting");
+    document.getElementById("selectOverlay").classList.remove("active");
+    view.cursor = "default";
+  }
+
+  // ── Analysis ──────────────────────────────────────────────────────────────
+  window.runAnalysis = async function() {
+    if (!selectedGeom) return;
+
+    const buffers = getBuffers();
+
+    document.getElementById("btnRun").disabled = true;
+    document.getElementById("btnRunLabel").textContent = "Running…";
+    document.getElementById("layerResults").style.display = "none";
+    document.getElementById("reportBox").classList.remove("visible");
+
+    setStatus("running", "Building buffers and querying layers…");
+    showProgress(5, "Building buffers…");
+
+    // Kick off JNCC loading NOW in parallel — it runs while buffers are built and layers queried
+    const jnccPromise = loadJncc();
+
+    // Build one buffer geometry per category
+    const bufGeoms = {};
+    for (const [cat, km] of Object.entries(buffers)) {
+      const m = km * 1000;
+      let g = await geometryEngineAsync.geodesicBuffer(selectedGeom, m, "meters");
+      if (!g) g = await geometryEngineAsync.buffer(selectedGeom, m, "meters");
+      bufGeoms[cat] = g;
+    }
+
+    // Draw all buffer rings — one per unique distance, largest first, with labels
+    if (bufferGraphic) {
+      (Array.isArray(bufferGraphic) ? bufferGraphic : [bufferGraphic])
+        .forEach(g => { try { view.graphics.remove(g); } catch(e) {} });
+    }
+    const bufferStyles = {
+      international: { color: [180, 30,  30,  0.04], outline: { color: [180, 30,  30,  0.75], width: 1.5, style: "dash" } },
+      national:      { color: [0,   110, 60,  0.04], outline: { color: [0,   110, 60,  0.75], width: 1.5, style: "dash" } },
+      local:         { color: [26,  90,  160, 0.04], outline: { color: [26,  90,  160, 0.75], width: 1.5, style: "dash" } },
+      records:       { color: [130, 60,  180, 0.04], outline: { color: [130, 60,  180, 0.75], width: 1.5, style: "dash" } },
+    };
+    const catLabels = { international: "International", national: "National", local: "Local", records: "Records" };
+
+    const drawnKm = new Set();
+    bufferGraphic = [];
+
+    // Sort largest first so smaller rings render on top
+    const catsBySize = Object.entries(bufGeoms)
+      .sort((a, b) => buffers[b[0]] - buffers[a[0]]);
+
+    catsBySize.forEach(([cat, geom]) => {
+      const km = buffers[cat];
+      if (drawnKm.has(km)) return;
+      drawnKm.add(km);
+
+      // Fill + outline ring
+      const fillG = new Graphic({
+        geometry: geom,
+        symbol: { type: "simple-fill", ...bufferStyles[cat] },
+        attributes: { type: "ecologicalBuffer" },
+      });
+      view.graphics.add(fillG);
+      bufferGraphic.push(fillG);
+
+      // Text label at the top of each ring
+      const ext = geom.extent;
+      if (ext) {
+        const labelG = new Graphic({
+          geometry: { type: "point", x: (ext.xmin + ext.xmax) / 2, y: ext.ymax, spatialReference: geom.spatialReference },
+          symbol: {
+            type: "text",
+            color: bufferStyles[cat].outline.color.slice(0,3).concat([1]),
+            haloColor: [255,255,255,0.8],
+            haloSize: 2,
+            text: `${km}km (${catLabels[cat]})`,
+            font: { size: 10, family: "sans-serif" },
+            verticalAlignment: "bottom",
+          },
+          attributes: { type: "ecologicalBuffer" },
+        });
+        view.graphics.add(labelG);
+        bufferGraphic.push(labelG);
+      }
+    });
+
+    // Zoom to the largest buffer
+    const largestGeom = catsBySize[0]?.[1];
+    if (largestGeom) view.goTo({ target: largestGeom, padding: { top: 60, bottom: 40, left: 40, right: 40 } });
+
+    // ── Query all layers in parallel ─────────────────────────────────────────
+    // Recursively find a layer by title through group layers
+    function findLayer(layers, title) {
+      const titleLower = title.toLowerCase();
+      let partialMatch = null;
+      for (let i = 0; i < layers.length; i++) {
+        const l = layers.getItemAt(i);
+        // Exact match first
+        if (l.title === title) return l;
+        // Case-insensitive exact match
+        if (l.title?.toLowerCase() === titleLower) return l;
+        // Partial match fallback — store first hit, keep looking for better
+        if (!partialMatch && l.title?.toLowerCase().includes(titleLower)) partialMatch = l;
+        if (l.type === "group" && l.layers) {
+          const found = findLayer(l.layers, title);
+          if (found) return found;
+        }
+      }
+      return partialMatch || null;
+    }
+
+    const total = CONFIG.layers.length;
+    let done = 0;
+    const results = {};
+
+    const promises = CONFIG.layers.map(async cfg => {
+      const cat = layerAssignments[cfg.title] || defaultCategory(cfg);
+
+      // Welsh WFS layers — query DataMapWales GeoServer directly, no web map layer needed
+      if (cfg.wfs) {
+        try {
+          const bufGeom = bufGeoms[cat];
+          const ext = bufGeom.extent;
+          const toWGS84 = (x, y) => {
+            const lon = (x / 20037508.34) * 180;
+            const lat = (Math.atan(Math.exp((y / 20037508.34) * Math.PI)) * 360 / Math.PI) - 90;
+            return [lon, lat];
+          };
+          const [minLon, minLat] = toWGS84(ext.xmin, ext.ymin);
+          const [maxLon, maxLat] = toWGS84(ext.xmax, ext.ymax);
+          const bbox = `${minLon},${minLat},${maxLon},${maxLat},EPSG:4326`;
+          const wfsUrl = `https://datamap.gov.wales/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=${cfg.wfsType}&outputFormat=json&BBOX=${bbox}&srsName=EPSG:4326`;
+          console.log(`WFS query "${cfg.title}" → ${wfsUrl}`);
+          const resp = await fetch(wfsUrl);
+          if (!resp.ok) throw new Error(`WFS HTTP ${resp.status}`);
+          const geojson = await resp.json();
+          const features = geojson.features || [];
+          const getName = (props) => {
+            for (const f of cfg.wfsNameFields || []) {
+              if (props[f]) return String(props[f]).trim();
+            }
+            console.log(`WFS "${cfg.title}" — no name field matched. Available props:`, Object.keys(props).join(", "));
+            return Object.values(props).find(v => typeof v === "string" && v.trim().length > 2) || "Unnamed";
+          };
+          const getArea = (props, geojsonGeom) => {
+            if (cfg.wfsAreaField && props[cfg.wfsAreaField] != null) return parseFloat(props[cfg.wfsAreaField]);
+            // Try all common NRW area field names
+            for (const f of ["cartesian_area_ha","area_ha","spherical_area_ha","ha","area","AREA","Shape__Area","shape_area","shape__area"]) {
+              if (props[f] != null && !isNaN(parseFloat(props[f]))) {
+                const v = parseFloat(props[f]);
+                // If value looks like m² (very large), convert to ha
+                return v > 10000 ? v / 10000 : v;
+              }
+            }
+            // Last resort: compute approximate area from GeoJSON polygon geometry
+            if (geojsonGeom && geojsonGeom.type === "Polygon" && geojsonGeom.coordinates) {
+              // Shoelace formula on first ring (degrees) — rough estimate only
+              const ring = geojsonGeom.coordinates[0];
+              if (ring && ring.length > 2) {
+                let area = 0;
+                for (let i = 0; i < ring.length - 1; i++) {
+                  area += ring[i][0] * ring[i+1][1] - ring[i+1][0] * ring[i][1];
+                }
+                // Convert degrees² to m² (approx at 52°N) then to ha
+                const m2 = Math.abs(area) / 2 * 111320 * 111320 * Math.cos(52 * Math.PI / 180);
+                return m2 / 10000;
+              }
+            }
+            return null;
+          };
+
+          // For groupByField layers sum area per habitat type (like English PHI)
+          let names, areaByType = null, countByType = null;
+          if (cfg.groupByField) {
+            areaByType = {};
+            countByType = {};
+            if (features.length > 0) {
+              const sampleProps = features[0].properties || {};
+              const propKeys = Object.keys(sampleProps).join(", ");
+              console.log(`WFS groupByField "${cfg.title}" — props: ${propKeys}`);
+              console.log(`WFS groupByField "${cfg.title}" — sample:`, JSON.stringify(sampleProps).slice(0, 300));
+              // Show in status bar for mobile debugging
+              setJnccStatus(`ℹ PHI Wales fields: ${propKeys.slice(0,100)}`, "loading");
+            }
+            features.forEach(f => {
+              const type = getName(f.properties || {});
+              if (!type || type === "Unnamed") return;
+              const ha = getArea(f.properties || {}, f.geometry);
+              countByType[type] = (countByType[type] || 0) + 1;
+              areaByType[type] = (areaByType[type] || 0) + (isNaN(ha) || ha == null ? 0 : ha);
+            });
+            names = Object.keys(areaByType);
+          } else {
+            names = [...new Set(features.map(f => getName(f.properties || {})).filter(n => n && n !== "Unnamed"))];
+          }
+
+          results[cfg.title] = {
+            status: features.length > 0 ? "found" : "absent",
+            count: features.length,
+            names,
+            _areaByType: areaByType,
+            _countByType: countByType,
+            features: features.map(f => ({
+              geometry: null,
+              attributes: { ...f.properties, _area_ha: getArea(f.properties || {}, f.geometry) },
+            })),
+            bufKm: buffers[cat],
+            cfg,
+          };
+        } catch(e) {
+          console.warn(`WFS "${cfg.title}" failed:`, e.message);
+          results[cfg.title] = { status: "missing", cfg, error: `WFS failed: ${e.message}`, wfsFailed: true };
+        }
+        update();
+        return;
+      }
+
+      const bufGeom = bufGeoms[cat];
+      const layer = findLayer(webMap.layers, cfg.title);
+
+      if (!layer) {
+        results[cfg.title] = { status: "missing", cfg };
+        update();
+        return;
+      }
+
+      // WMS layers cannot be queried via REST — mark for manual check
+      if (layer.type === "wms" || layer.type === "wmts" || layer.type === "wms-sublayer") {
+        results[cfg.title] = { status: "missing", cfg, error: "WMS layer — cannot query directly" };
+        update();
+        return;
+      }
+
+      // Build service URL
+      let url = layer.url;
+      if (layer.layerId !== undefined && layer.layerId !== null) url += `/${layer.layerId}`;
+      else if (layer.sublayers && layer.sublayers.length) url += `/0`;
+      console.log(`Querying "${cfg.title}" → ${url}`);
+
+      try {
+        const PAGE = 500;
+
+        if (cfg.type === "lad") {
+          // Query using the RLB centroid point to find which single LA the site is in
+          let centroidGeom;
+          if (selectedGeom.centroid) {
+            centroidGeom = selectedGeom.centroid;
+          } else if (selectedGeom.extent) {
+            centroidGeom = {
+              type: "point",
+              x: (selectedGeom.extent.xmin + selectedGeom.extent.xmax) / 2,
+              y: (selectedGeom.extent.ymin + selectedGeom.extent.ymax) / 2,
+              spatialReference: selectedGeom.spatialReference,
+            };
+          } else {
+            centroidGeom = selectedGeom;
+          }
+          const ladQ = new Query({
+            geometry: centroidGeom,
+            geometryType: "esriGeometryPoint",
+            spatialRelationship: "intersects",
+            outFields: ["LAD22NM", "LAD22CD"],
+            returnGeometry: false,
+            num: 1,
+          });
+          const ladFs = await queryREST.executeQueryJSON(url, ladQ);
+          const ladFeatures = ladFs.features || [];
+          const ladNames = [...new Set(ladFeatures.map(f => f.attributes["LAD22NM"]).filter(Boolean))];
+          console.log("LAD result:", ladNames);
+          results[cfg.title] = {
+            status: ladNames.length > 0 ? "found" : "absent",
+            count: ladNames.length,
+            names: ladNames,
+            features: ladFeatures.map(f => ({ geometry: null, attributes: f.attributes })),
+            bufKm: buffers[cat],
+            cfg,
+          };
+
+        } else if (cfg.type === "bat") {
+          // Bat zones: query against the RLB itself (not the buffer)
+          const batQ = new Query({
+            geometry: selectedGeom,
+            spatialRelationship: "intersects",
+            outFields: ["*"], // fetch all fields so we can try multiple band field names
+            returnGeometry: false,
+            num: 10,
+          });
+          const batFs = await queryREST.executeQueryJSON(url, batQ);
+          const batFeatures = batFs.features || [];
+          // Try several possible field name spellings for the consultation band
+          const BAND_FIELDS = ["Consutatio_Band", "Consultation_Band", "ConsultationBand", "Band", "BAND"];
+          const bands = [...new Set(
+            batFeatures.map(f => {
+              for (const field of BAND_FIELDS) {
+                const v = f.attributes[field];
+                if (v) return String(v).trim();
+              }
+              // Last resort: find any attribute with "band" in the key
+              const bandKey = Object.keys(f.attributes).find(k => /band/i.test(k));
+              return bandKey ? String(f.attributes[bandKey]).trim() : null;
+            }).filter(Boolean)
+          )];
+          results[cfg.title] = {
+            status: batFeatures.length > 0 ? "found" : "absent",
+            count: batFeatures.length,
+            names: bands,
+            features: batFeatures,
+            bufKm: buffers[cat],
+            cfg,
+          };
+
+        } else if (cfg.groupByField) {
+          // PHI: fetch name + area fields, sum area per habitat type
+          const nameQ = new Query({
+            geometry: bufGeom, spatialRelationship: "intersects",
+            outFields: [cfg.nameField, "Shape__Area", "AreaHa"],
+            returnGeometry: false, num: 2000
+          });
+          const nameFs = await queryREST.executeQueryJSON(url, nameQ);
+          const features = nameFs.features || [];
+          console.log(`PHI query: ${features.length} features`);
+
+          // Sum area per habitat type (Shape__Area is in map units m², convert to ha)
+          const areaByType = {};
+          features.forEach(f => {
+            const type = f.attributes[cfg.nameField];
+            if (!type) return;
+            const rawArea = f.attributes["Shape__Area"] || f.attributes["AreaHa"];
+            const ha = f.attributes["AreaHa"]
+              ? parseFloat(f.attributes["AreaHa"])
+              : parseFloat(rawArea) / 10000;
+            areaByType[type] = (areaByType[type] || 0) + (isNaN(ha) ? 0 : ha);
+          });
+
+          // True count fallback
+          let trueCount = features.length;
+          try {
+            const cr = await queryREST.executeQueryJSON(url,
+              new Query({ geometry: bufGeom, spatialRelationship: "intersects", returnCountOnly: true, where: "1=1" }));
+            if (cr.count > 0) trueCount = cr.count;
+          } catch(e) {}
+
+          results[cfg.title] = {
+            status: trueCount > 0 ? "found" : (features.length > 0 ? "found" : "absent"),
+            count: trueCount,
+            names: Object.keys(areaByType),
+            _areaByType: areaByType,
+            _rawNames: features.map(f => f.attributes[cfg.nameField]).filter(Boolean),
+            features: [],
+            bufKm: buffers[cat],
+            cfg,
+          };
+
+        } else {
+          // Paginate to get all features (geometry + attributes), capped at 2000
+          const allFeatures = [];
+          let offset = 0;
+          const MAX = 2000;
+
+          while (offset < MAX) {
+            const q = new Query({
+              geometry: bufGeom,
+              spatialRelationship: "intersects",
+              outFields: ["*"],
+              returnGeometry: true,
+              num: PAGE,
+              start: offset,
+            });
+            const fs = await queryREST.executeQueryJSON(url, q);
+            const batch = fs.features || [];
+            allFeatures.push(...batch);
+            if (batch.length < PAGE) break;
+            offset += PAGE;
+          }
+
+          let trueCount = allFeatures.length;
+          if (allFeatures.length >= MAX) {
+            try {
+              const countQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", returnCountOnly: true, where: "1=1" });
+              const cr = await queryREST.executeQueryJSON(url, countQ);
+              trueCount = cr.count || allFeatures.length;
+            } catch(e) {}
+          }
+
+          const rawNames = allFeatures.map(f => f.attributes[cfg.nameField]).filter(Boolean);
+          const unique = [...new Set(rawNames)];
+
+          results[cfg.title] = {
+            status: allFeatures.length > 0 ? "found" : "absent",
+            count: trueCount,
+            names: unique,
+            features: allFeatures,
+            bufKm: buffers[cat],
+            cfg,
+          };
+        }
+      } catch(e) {
+        results[cfg.title] = { status: "missing", cfg, error: e.message };
+      }
+      update();
+    });
+
+    function update() {
+      done++;
+      const pct = Math.round((done / total) * 100);
+      const remaining = CONFIG.layers.filter(l => !results[l.title]);
+      const nextName = remaining.length ? remaining[0].title.split("(")[0].trim() : "Finalising…";
+      showProgress(pct, `Querying: ${nextName}`);
+    }
+
+    await Promise.all(promises);
+
+    hideProgress();
+    renderLayerList(results);
+    window._lastResults = results;
+    window._lastBuffers = buffers;
+    window._lastSiteName = document.getElementById("btnSelectLabel").textContent.replace("✓ ", "") || "";
+
+    // Await JNCC in parallel — by now it will usually already be done
+    setStatus("running", "Finalising report…");
+    await jnccPromise;
+
+    setStatus("running", "Calculating distances and building report…");
+    const report = await buildReport(results, buffers, selectedGeom);
+    renderReport(report);
+    setStatus("info", `✓ Screening complete — ${CONFIG.layers.filter(l => results[l.title]?.status === "found").length} layer(s) with intersecting features.`);
+    resetRunButton();
+    document.getElementById("btnReset").style.display = "block";
+  };
+
+  // ── Layer results list ────────────────────────────────────────────────────
+  function renderLayerList(results) {
+    const list = document.getElementById("layerList");
+    list.innerHTML = "";
+
+    CONFIG.layers.forEach(cfg => {
+      const r = results[cfg.title];
+      if (!r) return;
+      if (r.status === "absent") return;
+      if (r.cfg.type === "lad") return; // LAD is infrastructure, not a designation layer
+
+      const item = document.createElement("div");
+      item.className = `layer-item ${r.status}`;
+
+      const dot = document.createElement("span");
+      dot.className = "layer-dot";
+
+      const name = document.createElement("span");
+      name.textContent = cfg.title.replace(/\(.*?\)/g, "").trim();
+
+      item.appendChild(dot);
+      item.appendChild(name);
+
+      if (r.status === "found") {
+        const count = document.createElement("span");
+        count.className = "layer-count";
+        count.textContent = r.count;
+        item.appendChild(count);
+      } else if (r.status === "missing") {
+        const tag = document.createElement("span");
+        tag.className = "layer-count";
+        tag.style.color = "#8a6200";
+        tag.textContent = "not found";
+        item.appendChild(tag);
+      }
+
+      list.appendChild(item);
+    });
+
+    document.getElementById("layerResults").style.display = "block";
+  }
+
+  // ── Distance and direction helpers ────────────────────────────────────────
+  async function nearestDistanceM(featureGeom, rlbGeom) {
+    try { return await geometryEngineAsync.distance(rlbGeom, featureGeom, "meters"); }
+    catch(e) { return null; }
+  }
+
+  function bearingToCardinal(bearing) {
+    const dirs = ["north","north-east","east","south-east","south","south-west","west","north-west"];
+    return dirs[Math.round(((bearing % 360) + 360) % 360 / 45) % 8];
+  }
+
+  function directionFromRlb(rlbGeom, featureGeom) {
+    if (!rlbGeom?.extent || !featureGeom?.extent) return null;
+    const rc = { x: (rlbGeom.extent.xmin + rlbGeom.extent.xmax) / 2, y: (rlbGeom.extent.ymin + rlbGeom.extent.ymax) / 2 };
+    const fc = { x: (featureGeom.extent.xmin + featureGeom.extent.xmax) / 2, y: (featureGeom.extent.ymin + featureGeom.extent.ymax) / 2 };
+    return bearingToCardinal(Math.atan2(fc.x - rc.x, fc.y - rc.y) * 180 / Math.PI);
+  }
+
+  function formatHa(attrs) {
+    // _area_ha is pre-computed for WFS features
+    if (attrs["_area_ha"] != null && !isNaN(attrs["_area_ha"])) return parseFloat(attrs["_area_ha"]).toFixed(2);
+    const raw = attrs["Shape__Area"] || attrs["AreaHa"] || attrs["AREA"] || attrs["MEASURE"];
+    if (!raw) return null;
+    const val = attrs["AreaHa"] ? parseFloat(raw) : parseFloat(raw) / 10000;
+    return val.toFixed(2);
+  }
+
+  function designationImportance(shortName) {
+    const s = shortName.toLowerCase();
+    if (s.includes("sac") || s.includes("spa") || s.includes("ramsar") || s.includes("special area") || s.includes("special protection")) return "International";
+    if (s.includes("sssi") || s.includes("special scientific") || s.includes("nnr") || s.includes("national nature") || s.includes("national park") || s.includes("aonb") || s.includes("outstanding natural beauty")) return "National";
+    return "Local";
+  }
+
+  function importanceClass(imp) {
+    if (imp === "International") return "badge-intl";
+    if (imp === "National") return "badge-natl";
+    return "badge-local";
+  }
+
+  function citationUrl(attrs, cfg) {
+    const shortName = (cfg?.shortName || "").toLowerCase();
+    const BASE = "https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=";
+
+    // HYPERLINK field contains numeric code only e.g. "1003970" — prepend "S"
+    const hyperlink = () => {
+      const h = String(attrs["HYPERLINK"] || "").trim();
+      if (!h) return null;
+      if (h.startsWith("http")) return h;
+      return `${BASE}S${h.replace(/^S/i, "")}`;
+    };
+
+    // SSSI — HYPERLINK field has the correct numeric code
+    if (shortName.includes("sssi") || shortName.includes("special scientific")) {
+      return hyperlink();
+    }
+
+    // SAC — SAC_CODE
+    if (shortName.includes("sac") || shortName.includes("special area")) {
+      const code = attrs["SAC_CODE"];
+      return code ? `${BASE}${code}` : null;
+    }
+
+    // SPA — SPA_CODE
+    if (shortName.includes("spa") || shortName.includes("special protection")) {
+      const code = attrs["SPA_CODE"];
+      return code ? `${BASE}${code}` : null;
+    }
+
+    // Ramsar — CODE
+    if (shortName.includes("ramsar")) {
+      const code = attrs["CODE"];
+      return code ? `${BASE}${code}` : null;
+    }
+
+    // NNR — HYPERLINK field has the correct numeric code (same pattern as SSSI)
+    if (shortName.includes("nnr") || shortName.includes("national nature")) {
+      return hyperlink();
+    }
+
+    // LNR — Google search (NE citation pages don't work reliably for LNRs)
+    if (shortName.includes("lnr") || shortName.includes("local nature")) {
+      const rawName = String(attrs["NAME"] || attrs["LABEL"] || "").trim();
+      const searchName = rawName || "local nature reserve";
+      return `https://www.google.com/search?q=${encodeURIComponent(searchName + " local nature reserve")}&ie=UTF-8`;
+    }
+
+    // AONB — HOTLINK field
+    if (shortName.includes("aonb") || shortName.includes("outstanding natural beauty")) {
+      if (attrs["HOTLINK"]) return attrs["HOTLINK"];
+      const code = attrs["CODE"];
+      return code ? `${BASE}${code}` : null;
+    }
+
+    // National Park — HOTLINK field
+    if (shortName.includes("national park")) {
+      if (attrs["HOTLINK"]) return attrs["HOTLINK"];
+      const code = attrs["CODE"];
+      return code ? `${BASE}${code}` : null;
+    }
+
+    return null;
+  }
+
+  function locStr(distM, dir) {
+    if (distM === null) return "within the buffer";
+    if (distM < 50) return "within or adjoining the site";
+    return `approx. ${(distM/1000).toFixed(1)}km ${dir || ""} of the site at its nearest point`;
+  }
+
+  // ── Wales detection ───────────────────────────────────────────────────────
+  // Converts Web Mercator centroid to approximate WGS84 and checks if it
+  // falls within the approximate bounding box of Wales.
+  function isInWales(geom) {
+    if (!geom || !geom.extent) return false;
+    const cx = (geom.extent.xmin + geom.extent.xmax) / 2;
+    const cy = (geom.extent.ymin + geom.extent.ymax) / 2;
+    // Web Mercator → approximate WGS84
+    const lon = (cx / 20037508.34) * 180;
+    const lat = (Math.atan(Math.exp((cy / 20037508.34) * Math.PI)) * 360 / Math.PI) - 90;
+    // Wales bounding box (approximate): lon -5.35 to -2.65, lat 51.35 to 53.45
+    return lon >= -5.35 && lon <= -2.65 && lat >= 51.35 && lat <= 53.45;
+  }
+
+  // ── Main report builder (async — calculates distances) ────────────────────
+  async function buildReport(results, buffers, rlbGeom) {
+    const bLabel = km => km >= 1 ? `${km}km` : `${km*1000}m`;
+    const date = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    const inWales = isInWales(rlbGeom);
+    let paraNum = 1;
+    const P = txt => `<p><span class="para-num">1.1.${paraNum++}</span>${txt}</p>`;
+    const ph = txt => `<span class="placeholder">[${txt}]</span>`;
+
+    // Helper: get the buffer label for a result
+    const rBuf = r => bLabel(r.bufKm || buffers.national);
+
+    const found   = CONFIG.layers.map(l => results[l.title]).filter(r => {
+      if (!r) return false;
+      if (r.status !== "found") return false;
+      if (r.cfg.type === "lad") return false;
+      if (!inWales && r.cfg.wfs && r.cfg.shortName.includes("Wales")) return false;
+      if (!inWales && r.cfg.wms && r.cfg.shortName.includes("Wales")) return false;
+      return true;
+    });
+    const missing = CONFIG.layers.map(l => results[l.title]).filter(r => {
+      if (!r || r.status !== "missing") return false;
+      if (r.cfg.type === "lad") return false;
+      if (r.cfg.wms || (r.cfg.wfs && !r.wfsFailed)) return false;
+      return true;
+    });
+    const wms = CONFIG.layers.map(l => results[l.title]).filter(r => {
+      if (!r || r.status !== "missing") return false;
+      if (r.cfg.type === "lad") return false;
+      if (!r.cfg.wms && !r.wfsFailed) return false;
+      if (!inWales && r.cfg.shortName.includes("Wales")) return false;
+      return true;
+    });
+
+    let html = `<h2>Desk Study Findings</h2>`;
+    html += P(`The desk study was undertaken on ${date}. Search radii of ${bLabel(buffers.international)} (international designations), ${bLabel(buffers.national)} (national designations and habitats), ${bLabel(buffers.local)} (local designations) and ${bLabel(buffers.records)} (biodiversity records) were applied to the red line boundary (RLB) of the application site and interrogated against national open access ecological datasets.`);
+
+    // ══ DESIGNATED SITES ═══════════════════════════════════════════════════
+    html += `<h2>Designated Sites</h2><h3>Statutory Designated Sites</h3>`;
+
+    const statutory = found.filter(r => r.cfg.type === "statutory");
+
+    // Build flat deduplicated feature list with distances
+    const statRows = [];
+    const seenNames = new Set();
+    for (const r of statutory) {
+      for (const f of r.features) {
+        let name = f.attributes[r.cfg.nameField] || "Unnamed";
+
+        // Append designation type to name where the name field doesn't include it
+        const sn = r.cfg.shortName.toLowerCase();
+        if (sn.includes("ramsar") && !/ramsar/i.test(name)) {
+          name = `${name} RAMSAR`;
+        } else if ((sn.includes("nnr") || sn.includes("national nature")) && !/nnr|national nature reserve/i.test(name)) {
+          name = `${name} NNR`;
+        } else if ((sn.includes("lnr") || sn.includes("local nature")) && !/lnr|local nature reserve/i.test(name)) {
+          // LNR names come in ALL CAPS — convert to title case then append LNR
+          name = name.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) + " LNR";
+        } else if (sn.includes("spa") && !/spa|special protection/i.test(name)) {
+          name = `${name} SPA`;
+        } else if (sn.includes("sac") && !/sac|special area/i.test(name)) {
+          name = `${name} SAC`;
+        }
+
+        if (seenNames.has(name)) continue;
+        seenNames.add(name);
+        // WFS features have no ArcGIS geometry — skip distance calculation
+        const distM = f.geometry ? await nearestDistanceM(f.geometry, rlbGeom) : null;
+        const dir   = f.geometry ? directionFromRlb(rlbGeom, f.geometry) : null;
+        const ha    = formatHa(f.attributes);
+        const imp   = designationImportance(r.cfg.shortName);
+        const cite  = citationUrl(f.attributes, r.cfg);
+        statRows.push({ name, distM, dir, ha, attrs: f.attributes, cfg: r.cfg, imp, cite });
+      }
+    }
+    statRows.sort((a, b) => (a.distM || 0) - (b.distM || 0));
+
+    if (statRows.length === 0) {
+      html += P(`No statutory designated sites for nature conservation were identified within the search area.`);
+    } else {
+      const intlRows = statRows.filter(r => r.imp === "International");
+      const natlRows = statRows.filter(r => r.imp === "National");
+      const localStatRows = statRows.filter(r => r.imp === "Local");
+      const parts = [];
+      if (intlRows.length) parts.push(`${intlRows.length} international designation${intlRows.length !== 1 ? "s" : ""} within a ${bLabel(buffers.international)} radius`);
+      if (natlRows.length) parts.push(`${natlRows.length} national designation${natlRows.length !== 1 ? "s" : ""} within a ${bLabel(buffers.national)} radius`);
+      if (localStatRows.length) parts.push(`${localStatRows.length} local designation${localStatRows.length !== 1 ? "s" : ""} within a ${bLabel(buffers.local)} radius`);
+      html += P(`${statRows.length} statutory designated site${statRows.length !== 1 ? "s" : ""} for nature conservation ${statRows.length !== 1 ? "were" : "was"} identified during the desk study (${parts.join("; ")}) and ${statRows.length !== 1 ? "are" : "is"} summarised in Table 1 below.`);
+      html += `<p><strong>Table 1: Summary of Statutory Designated Sites for Nature Conservation</strong></p>
+      <table><thead><tr><th>Site Name</th><th>Size, Distance and Direction from Site</th><th>Reason for Designation</th><th>Importance</th></tr></thead><tbody>`;
+      for (const row of statRows.filter(r => r.imp !== "Local")) {
+        const sizeStr = row.ha ? `${row.ha} hectares<br>` : "";
+        const distText = locStr(row.distM, row.dir);
+        // Ensure "approx." prefix and capitalise first letter
+        const distFormatted = distText.startsWith("approx.")
+          ? "Approx. " + distText.slice(7)
+          : distText.charAt(0).toUpperCase() + distText.slice(1);
+        const reasonCell = row.cite
+          ? `<a class="citation-link" href="${row.cite}" target="_blank">[Insert from NE citation ↗]</a>`
+          : ph("Insert from NE citation");
+        html += `<tr>
+          <td>${row.name}</td>
+          <td>${sizeStr}${distFormatted}</td>
+          <td>${reasonCell}</td>
+          <td><span class="badge ${importanceClass(row.imp)}">${row.imp}</span></td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+
+    // Local / non-statutory
+    html += `<h3>Local and Non-Statutory Designated Sites</h3>`;
+    const lnrRows = statRows.filter(r => r.imp === "Local");
+    if (lnrRows.length === 0) {
+      html += P(`No local or non-statutory designated sites for nature conservation were identified within the ${bLabel(buffers.local)} search radius.`);
+    } else {
+      const n = lnrRows.length;
+      html += P(`${n === 1 ? "One" : n} local or non-statutory designated site${n !== 1 ? "s" : ""} for nature conservation ${n !== 1 ? "were" : "was"} identified and ${n !== 1 ? "are" : "is"} summarised in Table 2 below.`);
+      html += `<p><strong>Table 2: Summary of Local and Non-Statutory Designated Sites for Nature Conservation</strong></p>
+      <table><thead><tr><th>Site Name</th><th>Distance and Direction from Site</th><th>Reason for Designation</th><th>Importance</th></tr></thead><tbody>`;
+      for (const row of lnrRows) {
+        html += `<tr>
+          <td>${row.name}</td>
+          <td>${locStr(row.distM, row.dir).charAt(0).toUpperCase() + locStr(row.distM, row.dir).slice(1)}</td>
+          <td>${ph("Insert designation reason")}</td>
+          <td><span class="badge badge-local">Local</span></td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+
+    html += P(`${ph("Insert Local Wildlife Sites (LWS) — open source data not available. Check with local LERC.")}`);
+
+    // ══ HABITATS ════════════════════════════════════════════════════════════
+    html += `<h2>Habitats</h2>`;
+    const habitats = found.filter(r => r.cfg.type === "habitat");
+    if (habitats.length === 0) {
+      html += P(`No designated or priority habitats were identified within the ${bLabel(buffers.national)} search radius.`);
+    } else {
+      for (const r of habitats) {
+        const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
+
+        if (r.cfg.groupByField) {
+          const areaByType = r._areaByType || {};
+          const countByType = r._countByType || {};
+          const types = Object.entries(areaByType).sort((a,b) => b[1] - a[1]);
+          const totalHa = Object.values(areaByType).reduce((s,v) => s+v, 0);
+          const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
+          const hasArea = totalHa > 0;
+          html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${rBuf(r)} buffer${hasArea ? ` (total area approximately ${totalHa.toFixed(2)} ha)` : ""}, comprising the following habitat types:`);
+          html += `<ul>` + types.map(([type, ha]) => {
+            const count = countByType[type] || 0;
+            const detail = hasArea ? `${ha.toFixed(2)} ha` : `${count} parcel${count !== 1 ? "s" : ""}`;
+            return `<li><strong>${type}</strong> — ${detail}</li>`;
+          }).join("") + `</ul>`;
+        } else {
+          const habRows = [];
+          for (const f of r.features) {
+            const name   = f.attributes[r.cfg.nameField] || "Unclassified";
+            const status = r.cfg.statusField ? (f.attributes[r.cfg.statusField] || "") : null;
+            const distM  = await nearestDistanceM(f.geometry, rlbGeom);
+            const dir    = directionFromRlb(rlbGeom, f.geometry);
+            const ha     = formatHa(f.attributes);
+            habRows.push({ name, status, distM, dir, ha });
+          }
+          habRows.sort((a, b) => (a.distM || 0) - (b.distM || 0));
+          html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${rBuf(r)} buffer.`);
+          if (habRows.length <= 15) {
+            html += `<ul>` + habRows.map(f => {
+              const statusStr = f.status ? ` (${f.status})` : "";
+              const haStr = f.ha ? ` — ${f.ha} ha` : "";
+              return `<li><strong>${f.name}</strong>${statusStr}${haStr} — ${locStr(f.distM, f.dir)}</li>`;
+            }).join("") + `</ul>`;
+          }
+        }
+      }
+    }
+
+    // ══ WATERCOURSES ════════════════════════════════════════════════════════
+    const rivers = found.filter(r => r.cfg.type === "river");
+    if (rivers.length) {
+      html += `<h2>Watercourses and River Habitats</h2>`;
+      for (const r of rivers) {
+        const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
+        if (r.cfg.lengthField && r.features.length) {
+          // Sum the length field across all returned features
+          const totalKm = r.features.reduce((sum, f) => {
+            const val = parseFloat(f.attributes[r.cfg.lengthField]);
+            return sum + (isNaN(val) ? 0 : val);
+          }, 0);
+          const lengthStr = totalKm >= 1
+            ? `${totalKm.toFixed(2)} km`
+            : `${(totalKm * 1000).toFixed(0)} m`;
+          const note = r.count >= 2000 ? ` (based on ${countLabel} features retrieved; true total may be higher)` : "";
+          html += P(`The ${r.cfg.shortName} layer intersects the buffer, with a total watercourse length of approximately ${lengthStr} within the ${rBuf(r)} search area${note}.`);
+        } else {
+          html += P(`${countLabel} feature${r.count !== 1 ? "s" : ""} of the ${r.cfg.shortName} layer ${r.count !== 1 ? "were" : "was"} identified within the ${rBuf(r)} buffer.`);
+        }
+      }
+    }
+
+    // ══ BAT CONSULTATION ZONES ══════════════════════════════════════════════
+    const bats = found.filter(r => r.cfg.type === "bat");
+    if (bats.length) {
+      html += `<h2>Bat Consultation Zones</h2>`;
+      const zoneLines = bats.map(r => {
+        const zoneName = r.cfg.shortName.replace("Bat Consultation Zone — ", "");
+        const bands = r.names.length ? ` (${r.names.join(", ")})` : "";
+        return `${zoneName}${bands}`;
+      });
+      html += P(`The red line boundary of the site falls within ${bats.length > 1 ? `${bats.length} Bat Consultation Zones` : "a Bat Consultation Zone"}: ${zoneLines.join("; ")}. Bat survey requirements should therefore be considered as part of any ecological assessment.`);
+    }
+
+    // ══ BIODIVERSITY RECORDS ════════════════════════════════════════════════
+    const records = found.filter(r => r.cfg.type === "records");
+    if (records.length) {
+      html += `<h2>Biodiversity Records</h2>`;
+
+      // Merge species from all record sources — store {common, latin} pairs
+      const allSpecies = [];
+      const seenCommon = new Set();
+      records.forEach(r => {
+        const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
+        html += P(`A total of ${countLabel} ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} retrieved within the ${rBuf(r)} buffer.`);
+        r.features.forEach(f => {
+          const common = String(f.attributes[r.cfg.nameField] || "").trim();
+          const latin  = r.cfg.latinField ? String(f.attributes[r.cfg.latinField] || "").trim() : "";
+          if (!common || seenCommon.has(common)) return;
+          seenCommon.add(common);
+          allSpecies.push({ common, latin });
+        });
+      });
+
+      // Cross-reference against JNCC — try Latin name first, fall back to common name
+      if (jnccLookup && Object.keys(jnccLookup).length > 0) {
+        const byCategory = {};
+        allSpecies.forEach(({ common, latin }) => {
+          const match = (latin && lookupSpecies(latin)) || lookupSpecies(common);
+          if (!match) return;
+          const cat = (match.taxonGroup || "Other")
+            .replace(/\s*\(.*?\)\s*/g, "").trim() // strip "(Hemichordata)" etc.
+            || "Other";
+          if (!byCategory[cat]) byCategory[cat] = [];
+          // Display as "Common name (Latin name)" if both available
+          const displayName = latin ? `${common} <em>(${latin})</em>` : common;
+          byCategory[cat].push({ displayName, designations: match.designations });
+        });
+
+        const protectedCount = Object.values(byCategory).reduce((s,v) => s+v.length, 0);
+
+        if (protectedCount > 0) {
+          html += P(`Of the ${allSpecies.length} species recorded, ${protectedCount} ${protectedCount !== 1 ? "are" : "is"} listed under UK or international conservation legislation or Red Lists. These are summarised below by taxonomic group.`);
+          Object.entries(byCategory).sort((a,b) => a[0].localeCompare(b[0])).forEach(([cat, spp]) => {
+            html += `<p><strong>${cat.charAt(0).toUpperCase() + cat.slice(1)}</strong></p>`;
+            html += `<ul>` + spp.map(s =>
+              `<li>${s.displayName} — ${s.designations.join("; ")}</li>`
+            ).join("") + `</ul>`;
+          });
+        } else {
+          html += P(`None of the ${allSpecies.length} species recorded were identified on the JNCC Conservation Designations list under the selected legislation. This does not preclude the presence of protected species within the wider site area.`);
+        }
+        html += `<p style="font-size:10px;color:#666;font-style:italic">Species protection data: JNCC Conservation Designations for UK Taxa (December 2023), OGL v3.</p>`;
+      } else if (jnccLookup === null) {
+        html += P(`${ph("JNCC species protection data is still loading — re-run the desk study in a moment to include protected species cross-referencing.")}`);
+      } else {
+        html += P(`Protected species cross-referencing against the JNCC Conservation Designations list was unavailable. All recorded species are listed below for manual review.`);
+        records.forEach(r => {
+          const uniqueNames = [...new Set(r.features.map(f => f.attributes[r.cfg.nameField]).filter(Boolean))];
+          if (uniqueNames.length) html += `<ul>` + uniqueNames.map(n => `<li>${n}</li>`).join("") + `</ul>`;
+        });
+      }
+    }
+
+    // ══ PLACEHOLDER SECTIONS ════════════════════════════════════════════════
+
+    // Get local authority name(s) from LAD query
+    const ladResult = results["Local Authority Districts (2022)"];
+    const ladNames = ladResult?.names || [];
+
+    function getLadLinks(laName) {
+      // Case-insensitive lookup
+      const key = Object.keys(CONFIG.ladLinks || {}).find(k => k.toLowerCase() === laName.toLowerCase());
+      return key ? CONFIG.ladLinks[key] : null;
+    }
+
+    function laSearchUrl(laName, topic) {
+      return `https://www.google.com/search?q=${encodeURIComponent(laName + " " + topic)}`;
+    }
+
+    // Local BAP
+    html += `<h2>Local BAP</h2>`;
+    if (ladNames.length > 0) {
+      ladNames.forEach(la => {
+        const links = getLadLinks(la);
+        const bapUrl = links?.bap || laSearchUrl(la, "Local Biodiversity Action Plan");
+        html += P(`The <a class="citation-link" href="${bapUrl}" target="_blank">${la} Local Biodiversity Action Plan ↗</a> should be consulted for relevant priority habitats and species.`);
+      });
+    } else {
+      html += P(`${ph("Insert relevant Local Biodiversity Action Plan habitats and species.")}`);
+    }
+
+    // Planning Policy
+    html += `<h2>Planning Policy</h2>`;
+    if (ladNames.length > 0) {
+      ladNames.forEach(la => {
+        const links = getLadLinks(la);
+        const planUrl = links?.localPlan || laSearchUrl(la, "Local Plan planning policy");
+        html += P(`The <a class="citation-link" href="${planUrl}" target="_blank">${la} Local Plan ↗</a> should be consulted for relevant planning policies relating to designated sites, protected species and habitats, and general ecological and environmental protection.`);
+      });
+    } else {
+      html += P(`${ph("Insert relevant local planning policies identified from the Local Development Framework and Local Plan.")}`);
+    }
+    // ══ DATA LIMITATIONS ════════════════════════════════════════════════════
+    if (wms.length || missing.length) {
+      html += `<h2>Data Limitations</h2>`;
+      if (wms.length) html += P(`The following Welsh designation layers are served as WMS and could not be queried automatically — check visually in the map: ${wms.map(r => r.cfg.shortName).join(", ")}.`);
+      if (missing.length) html += P(`The following layers could not be queried and should be verified manually: ${missing.map(r => r.cfg.shortName).join(", ")}.`);
+    }
+
+    return html;
+  }
+
+  // ── Render report ─────────────────────────────────────────────────────────
+  function renderReport(html) {
+    document.getElementById("reportBody").innerHTML = html;
+    document.getElementById("reportBox").classList.add("visible");
+    document.getElementById("reportBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  // ── Copy ──────────────────────────────────────────────────────────────────
+  // ── Export to Word ────────────────────────────────────────────────────────
+  // Pure vanilla JS — no external libraries, no AMD conflicts.
+  // Builds a valid .docx (OOXML) using native browser Compression Streams API.
+
+  // ── Zip builder (native DeflateRaw) ───────────────────────────────────────
+  async function deflateRaw(data) {
+    const cs = new CompressionStream("deflate-raw");
+    const writer = cs.writable.getWriter();
+    writer.write(data);
+    writer.close();
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    const out = new Uint8Array(chunks.reduce((a,b) => a+b.length, 0));
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return out;
+  }
+
+  function crc32(data) {
+    let crc = 0xFFFFFFFF;
+    const table = crc32.t || (crc32.t = (() => {
+      const t = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let j = 0; j < 8; j++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        t[i] = c;
+      }
+      return t;
+    })());
+    for (let i = 0; i < data.length; i++) crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function u16le(n) { return [n & 0xFF, (n >> 8) & 0xFF]; }
+  function u32le(n) { return [n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >> 24) & 0xFF]; }
+
+  async function buildZip(files) {
+    // files: [{name, data: Uint8Array}]
+    const enc = new TextEncoder();
+    const entries = [];
+
+    for (const f of files) {
+      const nameBytes = enc.encode(f.name);
+      const compressed = await deflateRaw(f.data);
+      const crc = crc32(f.data);
+      const localHeader = new Uint8Array([
+        0x50,0x4B,0x03,0x04, // local file header sig
+        0x14,0x00,           // version needed: 2.0
+        0x00,0x00,           // general purpose flags
+        0x08,0x00,           // compression: deflate
+        0x00,0x00,           // mod time
+        0x00,0x00,           // mod date
+        ...u32le(crc),
+        ...u32le(compressed.length),
+        ...u32le(f.data.length),
+        ...u16le(nameBytes.length),
+        0x00,0x00,           // extra field length
+        ...nameBytes,
+      ]);
+      entries.push({ nameBytes, localHeader, compressed, crc, uncompressedSize: f.data.length });
+    }
+
+    // Assemble local file entries
+    const parts = [];
+    let offset = 0;
+    const offsets = [];
+    for (const e of entries) {
+      offsets.push(offset);
+      parts.push(e.localHeader);
+      parts.push(e.compressed);
+      offset += e.localHeader.length + e.compressed.length;
+    }
+
+    // Central directory
+    const cdParts = [];
+    let cdSize = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const cd = new Uint8Array([
+        0x50,0x4B,0x01,0x02, // central dir sig
+        0x14,0x00,           // version made by
+        0x14,0x00,           // version needed
+        0x00,0x00,           // flags
+        0x08,0x00,           // compression
+        0x00,0x00,0x00,0x00, // mod time/date
+        ...u32le(e.crc),
+        ...u32le(e.compressed.length),
+        ...u32le(e.uncompressedSize),
+        ...u16le(e.nameBytes.length),
+        0x00,0x00,           // extra
+        0x00,0x00,           // comment
+        0x00,0x00,           // disk start
+        0x00,0x00,           // int attrib
+        0x00,0x00,0x00,0x00, // ext attrib
+        ...u32le(offsets[i]),
+        ...e.nameBytes,
+      ]);
+      cdParts.push(cd);
+      cdSize += cd.length;
+    }
+
+    // End of central directory record
+    const eocd = new Uint8Array([
+      0x50,0x4B,0x05,0x06,
+      0x00,0x00,0x00,0x00,
+      ...u16le(entries.length),
+      ...u16le(entries.length),
+      ...u32le(cdSize),
+      ...u32le(offset),
+      0x00,0x00,
+    ]);
+
+    const all = [...parts, ...cdParts, eocd];
+    const total = all.reduce((a, b) => a + b.length, 0);
+    const out = new Uint8Array(total);
+    let pos = 0;
+    for (const p of all) { out.set(p, pos); pos += p.length; }
+    return out;
+  }
+
+  // ── OOXML builder ──────────────────────────────────────────────────────────
+  window.exportToWord = async function() {
+    const btn = document.getElementById("btnExport");
+    btn.textContent = "Generating\u2026";
+    btn.disabled = true;
+    try {
+      const el = document.getElementById("reportBody");
+      const enc = new TextEncoder();
+      const FONT="Century Gothic", GREEN="1A3D2B", ALT="F4F9F5", SZ9="18", SZ8="16";
+      const esc = s => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+      function rpr(sz,bold,col) {
+        return `<w:rPr>${bold?"<w:b/>":""}<w:color w:val="${col||"111D13"}"/><w:sz w:val="${sz||SZ9}"/><w:szCs w:val="${sz||SZ9}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr>`;
+      }
+      function run(t,sz,bold,col){ return `<w:r>${rpr(sz,bold,col)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`; }
+      function par(runs,after){ return `<w:p><w:pPr><w:spacing w:after="${after||80}"/></w:pPr>${runs}</w:p>`; }
+
+      // Collect hyperlinks as we build — each gets a unique rId
+      const hyperlinkRels = [];
+      function hlRun(text, href, sz) {
+        const rId = `rLnk${hyperlinkRels.length + 2}`; // rId1 = styles
+        hyperlinkRels.push({ rId, href });
+        return `<w:hyperlink r:id="${rId}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:color w:val="2D6A4F"/><w:u w:val="single"/><w:sz w:val="${sz||SZ8}"/><w:szCs w:val="${sz||SZ8}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr><w:t>${esc(text)}</w:t></w:r></w:hyperlink>`;
+      }
+
+      // Build cell content — handles inline <a> tags as Word hyperlinks
+      function cellContent(td, sz, isHdr, textCol) {
+        const parts = [];
+        td.childNodes.forEach(n => {
+          if (n.nodeType === 3) { // text node
+            const t = n.textContent.trim();
+            if (t) parts.push(run(t, sz, isHdr, textCol));
+          } else if (n.nodeType === 1 && n.tagName === "A") {
+            const href = n.getAttribute("href");
+            const t = n.innerText.trim();
+            if (href && t) parts.push(hlRun(t, href, sz));
+            else if (t) parts.push(run(t, sz, false, "2D6A4F"));
+          } else if (n.nodeType === 1) {
+            const t = n.innerText?.trim();
+            if (t) parts.push(run(t, sz, isHdr, textCol));
+          }
+        });
+        return parts.join("") || run(td.innerText.trim(), sz, isHdr, textCol);
+      }
+
+      // ── Layout constants ──────────────────────────────────────────────────
+      const BODY_L = 1080;  // body text indent (twips) — ~1.9cm
+      const AFTER  = 240;   // space after paragraph (~1 line gap at 12pt)
+      const FONT_COLOR = "000000";
+
+      // Numbered paragraph: number at col 0, tab to BODY_L, wrapped lines at BODY_L
+      function numberedPPr(before) {
+        return `<w:pPr>
+          <w:jc w:val="both"/>
+          <w:spacing w:line="240" w:lineRule="auto" w:before="${before||0}" w:after="${AFTER}"/>
+          <w:ind w:left="${BODY_L}" w:hanging="${BODY_L}"/>
+          <w:tabs><w:tab w:val="left" w:pos="${BODY_L}"/></w:tabs>
+        </w:pPr>`;
+      }
+
+      // Plain indented paragraph (headings, table captions, bullets)
+      function indentPPr(before, after, extraLeft) {
+        return `<w:pPr>
+          <w:jc w:val="both"/>
+          <w:spacing w:line="240" w:lineRule="auto" w:before="${before||0}" w:after="${after||AFTER}"/>
+          <w:ind w:left="${BODY_L + (extraLeft||0)}"/>
+        </w:pPr>`;
+      }
+
+      let body = "";
+      el.childNodes.forEach(node => {
+        if (node.nodeType !== 1) return;
+        const tag = node.tagName.toLowerCase();
+
+        if (tag === "h2") {
+          // Section heading — bold black, indented
+          body += `<w:p>${indentPPr(200,80)}<w:r>${rpr(SZ9,true,FONT_COLOR)}<w:t>${esc(node.innerText)}</w:t></w:r></w:p>`;
+
+        } else if (tag === "h3") {
+          // Sub-heading — italic underline, indented
+          body += `<w:p>${indentPPr(80,40)}<w:r><w:rPr><w:i/><w:u w:val="single"/><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr><w:t>${esc(node.innerText)}</w:t></w:r></w:p>`;
+
+        } else if (tag === "p") {
+          const ns = node.querySelector(".para-num");
+          const ph = node.querySelector(".placeholder");
+          const textCol = ph ? "8A6200" : FONT_COLOR;
+
+          if (ns) {
+            // Number + TAB + body (walk children for inline links)
+            let bodyRuns = "";
+            node.childNodes.forEach(n => {
+              if (n === ns || (ns && n.contains && n.contains(ns))) return;
+              if (n.nodeType === 3) {
+                const t = n.textContent;
+                if (t) bodyRuns += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+              } else if (n.nodeType === 1 && n.tagName === "A") {
+                const href = n.getAttribute("href");
+                if (href) bodyRuns += hlRun(n.innerText.trim(), href, SZ9);
+                else bodyRuns += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(n.innerText)}</w:t></w:r>`;
+              } else if (n.nodeType === 1) {
+                const t = n.innerText?.trim();
+                if (t) bodyRuns += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+              }
+            });
+            body += `<w:p>${numberedPPr()}<w:r>${rpr(SZ9,true,FONT_COLOR)}<w:t>${esc(ns.innerText)}</w:t></w:r><w:r><w:rPr><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr><w:tab/></w:r>${bodyRuns || `<w:r>${rpr(SZ9,false,textCol)}<w:t/></w:r>`}</w:p>`;
+          } else {
+            // Un-numbered paragraph — walk for inline links too
+            let runs = "";
+            node.childNodes.forEach(n => {
+              if (n.nodeType === 3) {
+                const t = n.textContent;
+                if (t) runs += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+              } else if (n.nodeType === 1 && n.tagName === "A") {
+                const href = n.getAttribute("href");
+                if (href) runs += hlRun(n.innerText.trim(), href, SZ9);
+                else runs += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(n.innerText)}</w:t></w:r>`;
+              } else if (n.nodeType === 1) {
+                const t = n.innerText?.trim();
+                if (t) runs += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+              }
+            });
+            body += `<w:p>${indentPPr()}${runs || `<w:r>${rpr(SZ9,false,textCol)}<w:t/></w:r>`}</w:p>`;
+          }
+
+        } else if (tag === "ul") {
+          node.querySelectorAll("li").forEach(li => {
+            body += `<w:p>${indentPPr(0,40,280)}<w:r>${rpr(SZ9,false,FONT_COLOR)}<w:t xml:space="preserve">\u2022  ${esc(li.innerText)}</w:t></w:r></w:p>`;
+          });
+
+        } else if (tag === "table") {
+          const rows = node.querySelectorAll("tr");
+          let tbl = `<w:tbl><w:tblPr><w:tblW w:w="9000" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="C9DECE"/><w:left w:val="single" w:sz="4" w:color="C9DECE"/><w:bottom w:val="single" w:sz="4" w:color="C9DECE"/><w:right w:val="single" w:sz="4" w:color="C9DECE"/><w:insideH w:val="single" w:sz="4" w:color="C9DECE"/><w:insideV w:val="single" w:sz="4" w:color="C9DECE"/></w:tblBorders></w:tblPr>`;
+          rows.forEach((tr,ri) => {
+            const cells = tr.querySelectorAll("th,td");
+            const isHdr = cells[0]?.tagName==="TH";
+            const fill = isHdr ? GREEN : (ri%2===0?"FFFFFF":ALT);
+            const cw = Math.floor(9000/cells.length);
+            let row = "<w:tr>";
+            cells.forEach(td => {
+              const content = isHdr
+                ? run(td.innerText.trim(), SZ8, true, "FFFFFF")
+                : cellContent(td, SZ8, false, FONT_COLOR);
+              row += `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/><w:shd w:val="clear" w:fill="${fill}"/></w:tcPr><w:p><w:pPr><w:spacing w:line="240" w:lineRule="auto" w:after="40" w:before="40"/></w:pPr>${content}</w:p></w:tc>`;
+            });
+            tbl += row + "</w:tr>";
+          });
+          body += tbl + "</w:tbl><w:p/>";
+        }
+      });
+
+      // Build document.xml with correct namespace for hyperlinks
+      const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="1080"/></w:sectPr></w:body></w:document>`;
+      const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:tabs><w:tab w:val="left" w:pos="${BODY_L}"/></w:tabs></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`;
+      const ctXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`;
+      const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
+
+      // Build docRels including all hyperlinks collected during body build
+      const hlRelsXml = hyperlinkRels.map(h =>
+        `<Relationship Id="${h.rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${h.href.replace(/&/g,"&amp;")}" TargetMode="External"/>`
+      ).join("");
+      const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${hlRelsXml}</Relationships>`;
+
+      const zipData = await buildZip([
+        { name: "[Content_Types].xml",          data: enc.encode(ctXml) },
+        { name: "_rels/.rels",                  data: enc.encode(rootRels) },
+        { name: "word/document.xml",            data: enc.encode(docXml) },
+        { name: "word/styles.xml",              data: enc.encode(stylesXml) },
+        { name: "word/_rels/document.xml.rels", data: enc.encode(docRels) },
+      ]);
+
+      const blob = new Blob([zipData], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Desk_Study_${new Date().toISOString().slice(0,10)}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      btn.textContent = "\u2713 Downloaded";
+      setTimeout(() => { btn.textContent = "\uD83D\uDCC4 Export to Word"; btn.disabled = false; }, 2500);
+    } catch(e) {
+      console.error("Word export failed:", e);
+      btn.textContent = "Export failed \u2014 see console";
+      btn.disabled = false;
+    }
+  };
+
+  // ── Search ────────────────────────────────────────────────────────────────
+  let searchDebounce = null;
+
+  window.onSearchInput = function(val) {
+    clearTimeout(searchDebounce);
+    if (!val.trim()) { hideSearchResults(); return; }
+    searchDebounce = setTimeout(() => suggestSearch(val), 300);
+  };
+
+  async function suggestSearch(query) {
+    const results = [];
+
+    // ── Search Red Line Boundary layer ───────────────────────────────────────
+    try {
+      const redLayers = [];
+      function collectRed(layers) {
+        layers.forEach(l => {
+          if (CONFIG.redLineTitlePattern.test(l.title)) redLayers.push(l);
+          if (l.type === "group" && l.layers) collectRed(l.layers);
+        });
+      }
+      collectRed(webMap.layers);
+      console.log("RLB layers found:", redLayers.map(l => `${l.title} [${l.type}] url=${l.url}`));
+
+      for (const layer of redLayers) {
+        // Ensure layer is loaded so its URL is available
+        try { await layer.load(); } catch(e) {}
+
+        let url = layer.url;
+        if (!url) { console.log("RLB layer has no URL:", layer.title); continue; }
+        if (layer.layerId !== undefined && layer.layerId !== null) url += `/${layer.layerId}`;
+        console.log("Searching RLB at:", url);
+
+        const safe = query.replace(/'/g, "''");
+        const q = new Query({
+          where: `Label LIKE '%${safe}%'`,
+          outFields: ["*"],
+          returnGeometry: true,
+          num: 8,
+        });
+        try {
+          const fs = await queryREST.executeQueryJSON(url, q);
+          console.log("RLB search results:", fs.features?.length);
+          (fs.features || []).forEach(f => {
+            const name = f.attributes["Label"] || f.attributes["Boundary_type"] || `Feature ${f.attributes["OBJECTID"]}`;
+            results.push({ label: name, type: "RLB", geometry: f.geometry });
+          });
+        } catch(e) { console.log("RLB query error:", e.message); }
+      }
+    } catch(e) { console.log("RLB search outer error:", e.message); }
+
+    // ── Geocode ───────────────────────────────────────────────────────────────
+    try {
+      const encoded = encodeURIComponent(query + ", United Kingdom");
+      const resp = await fetch(
+        `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/suggest?text=${encoded}&maxSuggestions=5&f=json`
+      );
+      const data = await resp.json();
+      (data.suggestions || []).forEach(s => {
+        results.push({ label: s.text, type: "Place", magicKey: s.magicKey });
+      });
+    } catch(e) {}
+
+    showSearchResults(results);
+  }
+
+  window.runSearch = function() {
+    suggestSearch(document.getElementById("searchInput").value);
+  };
+
+  function showSearchResults(results) {
+    const container = document.getElementById("searchResults");
+    container.innerHTML = "";
+    if (!results.length) {
+      container.innerHTML = `<div class="search-result-item" style="color:var(--ink-faint)">No results found</div>`;
+      container.classList.add("active");
+      return;
+    }
+    results.forEach(r => {
+      const div = document.createElement("div");
+      div.className = "search-result-item";
+      div.innerHTML = `${r.label} <span class="result-type">${r.type}</span>`;
+      div.onclick = () => selectSearchResult(r);
+      container.appendChild(div);
+    });
+    container.classList.add("active");
+  }
+
+  function hideSearchResults() {
+    document.getElementById("searchResults").classList.remove("active");
+  }
+
+  async function selectSearchResult(result) {
+    document.getElementById("searchInput").value = result.label;
+    hideSearchResults();
+
+    if (result.geometry) {
+      // RLB feature — zoom and auto-select as the active boundary
+      view.popup.close(); // suppress popup during programmatic selection
+      view.goTo({ target: result.geometry, zoom: 15 });
+
+      // Auto-select: set as selectedGeom and update UI as if user clicked it
+      selectedGeom = result.geometry;
+      document.getElementById("btnSelect").classList.remove("selecting");
+      document.getElementById("btnSelect").classList.add("selected");
+      document.getElementById("btnSelectLabel").textContent = `✓ ${result.label}`;
+      document.getElementById("btnRun").disabled = false;
+      setStatus("info", `✓ "${result.label}" selected — ready to run desk study.`);
+
+    } else if (result.magicKey) {
+      // Geocoded place — zoom only
+      try {
+        const encoded = encodeURIComponent(result.label);
+        const resp = await fetch(
+          `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?SingleLine=${encoded}&magicKey=${result.magicKey}&outFields=&f=json`
+        );
+        const data = await resp.json();
+        const loc = data.candidates?.[0]?.location;
+        if (loc) view.goTo({ target: { x: loc.x, y: loc.y, spatialReference: { wkid: 4326 } }, zoom: 14 });
+      } catch(e) {}
+    }
+  }
+
+  // Close search results when clicking outside
+  document.addEventListener("click", e => {
+    if (!document.getElementById("searchBar")?.contains(e.target)) hideSearchResults();
+  });
+
+  // ── Reset ─────────────────────────────────────────────────────────────────
+  window.resetTool = function() {
+    resetState(true);
+  };
+
+  function resetState(full) {
+    if (clickHandler) { clickHandler.remove(); clickHandler = null; }
+    if (sketchVM) { try { sketchVM.cancel(); } catch(e) {} }
+    if (full) {
+      selectedGeom = null;
+      drawLayer.removeAll();
+      if (bufferGraphic) {
+        (Array.isArray(bufferGraphic) ? bufferGraphic : [bufferGraphic])
+          .forEach(g => { try { view.graphics.remove(g); } catch(e) {} });
+        bufferGraphic = null;
+      }
+      document.getElementById("btnSelect").classList.remove("selecting", "selected");
+      document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
+      document.getElementById("btnDraw").classList.remove("drawing", "selected");
+      document.getElementById("btnDrawLabel").textContent = "Draw red line boundary";
+      document.getElementById("btnRun").disabled = true;
+      document.getElementById("btnRunLabel").textContent = "Run Desk Study";
+      document.getElementById("layerResults").style.display = "none";
+      document.getElementById("reportBox").classList.remove("visible");
+      document.getElementById("btnReset").style.display = "none";
+      hideProgress();
+      clearStatus();
+    }
+    view.cursor = "default";
+    document.getElementById("selectOverlay").classList.remove("active");
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function setStatus(type, msg) {
+    const el = document.getElementById("statusBar");
+    el.className = `status-bar ${type}`;
+    el.textContent = msg;
+  }
+  function clearStatus() {
+    const el = document.getElementById("statusBar");
+    el.className = "status-bar";
+    el.textContent = "";
+  }
+  function showProgress(pct, label) {
+    document.getElementById("progressWrap").classList.add("active");
+    document.getElementById("progressBar").style.width = pct + "%";
+    document.getElementById("progressLabel").textContent = label;
+  }
+  function hideProgress() {
+    document.getElementById("progressWrap").classList.remove("active");
+  }
+  function resetRunButton() {
+    document.getElementById("btnRun").disabled = false;
+    document.getElementById("btnRunLabel").textContent = "Run Desk Study";
+  }
+
+  // ── Export Map ────────────────────────────────────────────────────────────
+  const PRINT_URL = "https://utility.arcgisonline.com/arcgis/rest/services/Utilities/PrintingTools/GPServer/Export%20Web%20Map%20Task";
+
+  window.openPrintModal = function() {
+    // Pre-fill title from current LAD results if available
+    const ladResult = Object.values(window._lastResults || {}).find(r => r?.cfg?.type === "lad");
+    const ladName = ladResult?.names?.[0] || "";
+    const bufferKm = Object.values(window._lastBuffers || {}).reduce((max, v) => Math.max(max, v), 0);
+    document.getElementById("pmTitle").value =
+      `Protected Sites Within ${bufferKm > 0 ? bufferKm + "km" : "Buffer"}` +
+      (ladName ? ` — ${ladName}` : "");
+    document.getElementById("pmProject").value = window._lastSiteName || "";
+    document.getElementById("pmStatus").style.display = "none";
+    document.getElementById("pmBtn").disabled = false;
+    document.getElementById("pmBtn").textContent = "Export";
+    document.getElementById("printModal").style.display = "flex";
+  };
+
+  window.closePrintModal = function() {
+    document.getElementById("printModal").style.display = "none";
+  };
+
+  window.executePrint = async function() {
+    const btn = document.getElementById("pmBtn");
+    const status = document.getElementById("pmStatus");
+    btn.disabled = true;
+    btn.textContent = "Exporting…";
+    status.innerHTML = "";
+    status.style.display = "block";
+    status.style.color = "#1a5da0";
+    status.textContent = "⏳ Sending to print service…";
+
+    const title   = document.getElementById("pmTitle").value || "Protected Sites";
+    const project = document.getElementById("pmProject").value || "";
+    const format  = document.getElementById("pmFormat").value;
+    const layout  = document.getElementById("pmLayout").value;
+    const scale   = document.getElementById("pmScale").value;
+
+    const layoutOptions = {
+      titleText: title,
+      authorText: "Clarkson & Woods Ecological Consultants",
+      copyrightText: `© Crown copyright and database rights ${new Date().getFullYear()} Ordnance Survey`,
+      scalebarUnit: "Meters",
+    };
+    if (project) layoutOptions.customTextElements = [{ "Project": project }];
+
+    const exportOptions = { dpi: 200 };
+
+    let result;
+    try {
+      const template = new PrintTemplate({
+        format,
+        layout,
+        layoutOptions,
+        exportOptions,
+        outScale: scale ? parseInt(scale) : undefined,
+        preserveScale: !!scale,
+      });
+      const params = new PrintParameters({ view, template });
+      status.textContent = "⏳ Generating map (may take up to 30 seconds)…";
+      console.log("Executing print:", PRINT_URL, { format, layout });
+      result = await printREST.execute(PRINT_URL, params);
+      console.log("Print result:", result);
+    } catch(err) {
+      console.error("Print error:", err);
+      status.style.color = "#c00";
+      status.textContent = `✗ Print service error: ${err?.message || JSON.stringify(err)}`;
+      btn.disabled = false;
+      btn.textContent = "Export";
+      return;
+    }
+
+    if (!result?.url) {
+      status.style.color = "#c00";
+      status.textContent = "✗ Print service returned no URL. Try a different format or layout.";
+      btn.disabled = false;
+      btn.textContent = "Export";
+      return;
+    }
+
+    // Success — show clickable link (window.open may be blocked by popup blocker)
+    status.style.color = "#1a3d2b";
+    status.innerHTML = `✓ Map ready — <a href="${result.url}" target="_blank" style="color:#1a3d2b;font-weight:bold;">click here to open / download ↗</a>`;
+    // Also try window.open
+    window.open(result.url, "_blank");
+    btn.disabled = false;
+    btn.textContent = "Export Again";
+  };
+
+}); // end require
+</script>
+<!-- ── Print Map Modal ───────────────────────────────────────────────────── -->
+<div id="printModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:10px;padding:24px;width:360px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.25);font-family:'Georgia',serif;">
+    <h3 style="margin:0 0 16px;font-size:15px;color:#1a3d2b;">Export Map Options</h3>
+
+    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Map Title</label>
+    <input id="pmTitle" type="text" placeholder="Protected Sites Within Xkm"
+      style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;"/>
+
+    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Project Name</label>
+    <input id="pmProject" type="text" placeholder="e.g. Land at Church Farm"
+      style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;"/>
+
+    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Format</label>
+    <select id="pmFormat" style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;">
+      <option value="jpg">JPG</option>
+      <option value="png32">PNG</option>
+      <option value="pdf">PDF</option>
+    </select>
+
+    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Layout</label>
+    <select id="pmLayout" style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;">
+      <option value="a3-landscape">A3 Landscape</option>
+      <option value="a4-landscape">A4 Landscape</option>
+      <option value="a3-portrait">A3 Portrait</option>
+      <option value="a4-portrait">A4 Portrait</option>
+    </select>
+
+    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Scale</label>
+    <select id="pmScale" style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:16px;box-sizing:border-box;">
+      <option value="">Current view (no fixed scale)</option>
+      <option value="10000">1:10,000</option>
+      <option value="25000">1:25,000</option>
+      <option value="50000">1:50,000</option>
+      <option value="100000">1:100,000</option>
+      <option value="200000">1:200,000</option>
+    </select>
+
+    <div id="pmStatus" style="font-size:11px;color:#1a5da0;margin-bottom:12px;display:none;"></div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="closePrintModal()"
+        style="padding:7px 16px;border:1px solid #c9dece;border-radius:5px;background:#fff;font-family:'Georgia',serif;font-size:12px;cursor:pointer;color:#3a4a3e;">
+        Cancel
+      </button>
+      <button id="pmBtn" onclick="executePrint()"
+        style="padding:7px 16px;border:none;border-radius:5px;background:#1a3d2b;color:#fff;font-family:'Georgia',serif;font-size:12px;cursor:pointer;font-weight:bold;">
+        Export
+      </button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

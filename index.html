@@ -2143,8 +2143,9 @@ require([
 
     hideProgress();
     renderLayerList(results);
-    window._lastResults = results;
-    window._lastBuffers = buffers;
+    window._lastResults  = results;
+    window._lastBuffers  = buffers;
+    window._lastBufGeoms = bufGeoms;
     window._lastSiteName = document.getElementById("btnSelectLabel").textContent.replace("✓ ", "") || "";
 
     // Await JNCC in parallel — by now it will usually already be done
@@ -3151,18 +3152,155 @@ require([
   }
 
   // ── Export Map ────────────────────────────────────────────────────────────
-  const PRINT_URL = "https://utility.arcgisonline.com/arcgis/rest/services/Utilities/PrintingTools/GPServer/Export%20Web%20Map%20Task";
+
+  // Map type definitions — built dynamically after analysis runs
+  let _mapTypes = [];
+  let _selectedMapType = 0;
 
   window.openPrintModal = function() {
-    // Pre-fill title from current LAD results if available
-    const ladResult = Object.values(window._lastResults || {}).find(r => r?.cfg?.type === "lad");
+    const results  = window._lastResults  || {};
+    const buffers  = window._lastBuffers  || {};
+    const bufGeoms = window._lastBufGeoms || {};
+    const siteName = window._lastSiteName || "";
+    const ladResult = Object.values(results).find(r => r?.cfg?.type === "lad");
     const ladName = ladResult?.names?.[0] || "";
-    const bufferKm = Object.values(window._lastBuffers || {}).reduce((max, v) => Math.max(max, v), 0);
-    document.getElementById("pmTitle").value =
-      `Protected Sites Within ${bufferKm > 0 ? bufferKm + "km" : "Buffer"}` +
-      (ladName ? ` — ${ladName}` : "");
-    document.getElementById("pmProject").value = window._lastSiteName || "";
+
+    // ── Build available map types from what was found ──────────────────────
+    _mapTypes = [];
+
+    const bufferStyles = {
+      international: { outline: [180, 30, 30] },
+      national:      { outline: [0, 110, 60] },
+      local:         { outline: [26, 90, 160] },
+      records:       { outline: [130, 60, 180] },
+    };
+    const catLabels = { international: "International", national: "National", local: "Local", records: "Records" };
+
+    // One map per unique buffer distance (excluding records)
+    const catOrder = ["international", "national", "local", "records"];
+    const seenKm = new Set();
+    catOrder.forEach(cat => {
+      const km = buffers[cat];
+      if (!km || seenKm.has(km)) return;
+      seenKm.add(km);
+
+      // Which layer types belong to this buffer?
+      const layerTypes = {
+        international: ["statutory"],
+        national:      ["statutory", "habitat", "river", "bat"],
+        local:         ["statutory"],
+        records:       ["records"],
+      }[cat] || [];
+
+      const foundLayers = Object.values(results).filter(r =>
+        r?.status === "found" && layerTypes.includes(r.cfg?.type) &&
+        (window._lastBuffers?.[Object.keys(window._lastBuffers||{}).find(k =>
+          window._lastBuffers[k] === km)] === km || r.bufKm === km)
+      );
+
+      // Legend items for this map
+      const legend = [
+        { color: `rgb(${bufferStyles[cat]?.outline?.join(",") || "100,100,100"})`, label: `${km}km buffer (${catLabels[cat]})`, dash: true },
+        { color: "#c1121f", label: "Red Line Boundary" },
+      ];
+      if (cat === "international" || cat === "national") {
+        legend.push(
+          { color: "#1a3d2b", label: "SSSI / SAC / SPA / Ramsar" },
+          { color: "#2d6a4f", label: "NNR / LNR" },
+        );
+      }
+      if (cat === "national" || cat === "local") {
+        legend.push({ color: "#1a5da0", label: "AONB / National Park" });
+      }
+      if (cat === "national") {
+        legend.push(
+          { color: "#52b788", label: "Ancient Woodland" },
+          { color: "#95d5b2", label: "Priority Habitat" },
+        );
+      }
+      if (cat === "records") {
+        legend.push({ color: "#8338ec", label: "Biodiversity Records" });
+      }
+
+      _mapTypes.push({
+        key: cat,
+        label: `${catLabels[cat]} Designations (${km}km buffer)`,
+        title: `${catLabels[cat]} Designated Sites Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
+        bufKm: km,
+        bufGeom: bufGeoms[cat],
+        legend,
+      });
+    });
+
+    // Habitats map (national buffer)
+    const habFound = Object.values(results).filter(r => r?.status === "found" && r.cfg?.type === "habitat");
+    if (habFound.length) {
+      const km = buffers.national;
+      _mapTypes.push({
+        key: "habitats",
+        label: `Habitats (${km}km buffer)`,
+        title: `Priority and Designated Habitats Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
+        bufKm: km,
+        bufGeom: bufGeoms.national,
+        legend: [
+          { color: `rgb(${bufferStyles.national.outline.join(",")})`, label: `${km}km buffer`, dash: true },
+          { color: "#c1121f", label: "Red Line Boundary" },
+          { color: "#52b788", label: "Ancient Woodland" },
+          { color: "#95d5b2", label: "Priority Habitat Inventory" },
+        ],
+      });
+    }
+
+    // Records map
+    const recFound = Object.values(results).filter(r => r?.status === "found" && r.cfg?.type === "records");
+    if (recFound.length) {
+      const km = buffers.records;
+      _mapTypes.push({
+        key: "records",
+        label: `Biodiversity Records (${km}km buffer)`,
+        title: `Biodiversity Records Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
+        bufKm: km,
+        bufGeom: bufGeoms.records,
+        legend: [
+          { color: `rgb(${bufferStyles.records.outline.join(",")})`, label: `${km}km buffer`, dash: true },
+          { color: "#c1121f", label: "Red Line Boundary" },
+          { color: "#8338ec", label: "Biodiversity Records" },
+        ],
+      });
+    }
+
+    // If nothing found yet, show a single generic option
+    if (_mapTypes.length === 0) {
+      _mapTypes.push({
+        key: "all",
+        label: "Current map view",
+        title: "Desk Study Map",
+        bufKm: null,
+        bufGeom: null,
+        legend: [{ color: "#c1121f", label: "Red Line Boundary" }],
+      });
+    }
+
+    // ── Build radio buttons ─────────────────────────────────────────────────
+    const container = document.getElementById("pmMapTypes");
+    container.innerHTML = "";
+    _mapTypes.forEach((mt, i) => {
+      const row = document.createElement("label");
+      row.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid #c9dece;border-radius:5px;cursor:pointer;font-size:12px;";
+      row.innerHTML = `<input type="radio" name="pmMapType" value="${i}" ${i===0?"checked":""}
+        style="accent-color:#1a3d2b;"> ${mt.label}`;
+      row.querySelector("input").addEventListener("change", () => {
+        _selectedMapType = i;
+        document.getElementById("pmTitle").value = _mapTypes[i].title;
+      });
+      container.appendChild(row);
+    });
+
+    _selectedMapType = 0;
+    document.getElementById("pmTitle").value = _mapTypes[0].title;
+    document.getElementById("pmProject").value = siteName;
     document.getElementById("pmStatus").style.display = "none";
+    document.getElementById("pmStatus").innerHTML = "";
     document.getElementById("pmBtn").disabled = false;
     document.getElementById("pmBtn").textContent = "Export";
     document.getElementById("printModal").style.display = "flex";
@@ -3173,136 +3311,173 @@ require([
   };
 
   window.executePrint = async function() {
-    const btn = document.getElementById("pmBtn");
+    const btn    = document.getElementById("pmBtn");
     const status = document.getElementById("pmStatus");
     btn.disabled = true;
     btn.textContent = "Capturing…";
     status.innerHTML = "";
     status.style.display = "block";
     status.style.color = "#1a5da0";
-    status.textContent = "⏳ Capturing map…";
+    status.textContent = "⏳ Zooming to buffer extent…";
 
-    const title   = document.getElementById("pmTitle").value || "Protected Sites";
+    const mt      = _mapTypes[_selectedMapType] || _mapTypes[0];
+    const title   = document.getElementById("pmTitle").value || mt.title;
     const project = document.getElementById("pmProject").value || "";
     const format  = document.getElementById("pmFormat").value;
 
     try {
-      // Take screenshot of the current map view
+      // ── Zoom to the relevant buffer extent first ─────────────────────────
+      if (mt.bufGeom) {
+        await view.goTo({ target: mt.bufGeom, padding: { top: 40, bottom: 40, left: 40, right: 40 } });
+        // Wait for map to settle and re-render
+        await new Promise(r => setTimeout(r, 1200));
+      }
+
+      status.textContent = "⏳ Capturing map…";
       const screenshot = await view.takeScreenshot({ format: "png", quality: 95 });
 
-      status.textContent = "⏳ Composing map image…";
+      status.textContent = "⏳ Composing image…";
 
-      // Create a canvas to composite map + title block
       const mapImg = new Image();
-      await new Promise((res, rej) => {
-        mapImg.onload = res;
-        mapImg.onerror = rej;
-        mapImg.src = screenshot.dataUrl;
-      });
+      await new Promise((res, rej) => { mapImg.onload = res; mapImg.onerror = rej; mapImg.src = screenshot.dataUrl; });
 
       const W = mapImg.width;
       const H = mapImg.height;
-      const PANEL = 220; // width of title block panel on right
+      const PANEL = 240;
       const canvas = document.createElement("canvas");
       canvas.width  = W + PANEL;
       canvas.height = H;
       const ctx = canvas.getContext("2d");
 
-      // ── Draw map
+      // ── Map
       ctx.drawImage(mapImg, 0, 0);
 
-      // ── Title block panel background
+      // ── Panel background + border
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(W, 0, PANEL, H);
-      ctx.strokeStyle = "#555";
+      ctx.strokeStyle = "#aaa";
       ctx.lineWidth = 1;
       ctx.strokeRect(W, 0, PANEL, H);
 
-      // ── C&W branding header
+      // ── C&W header
       ctx.fillStyle = "#1a3d2b";
-      ctx.fillRect(W, 0, PANEL, 48);
+      ctx.fillRect(W, 0, PANEL, 56);
       ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 13px Arial";
-      ctx.fillText("CLARKSON", W + 10, 20);
-      ctx.fillText("& WOODS", W + 10, 36);
-      ctx.font = "9px Arial";
-      ctx.fillText("ECOLOGICAL CONSULTANTS", W + 10, 48);
+      ctx.font = "bold 14px Arial";
+      ctx.fillText("CLARKSON & WOODS", W + 10, 22);
+      ctx.font = "10px Arial";
+      ctx.fillText("Ecological Consultants", W + 10, 38);
+      ctx.font = "8px Arial";
+      ctx.fillStyle = "#c9dece";
+      ctx.fillText("clarksonandwoods.co.uk", W + 10, 52);
 
-      // ── Title block fields
-      const field = (label, value, y) => {
-        ctx.fillStyle = "#555";
-        ctx.font = "9px Arial";
-        ctx.fillText(label, W + 10, y);
-        ctx.fillStyle = "#000";
-        ctx.font = "11px Arial";
-        // Word-wrap value
-        const words = String(value).split(" ");
-        let line = "", ly = y + 14;
-        words.forEach(w => {
-          const test = line + (line ? " " : "") + w;
-          if (ctx.measureText(test).width > PANEL - 20) {
-            ctx.fillText(line, W + 10, ly); ly += 13; line = w;
-          } else { line = test; }
-        });
-        if (line) ctx.fillText(line, W + 10, ly);
-        return ly + 8;
+      // ── Divider helper
+      const divider = (yy) => {
+        ctx.strokeStyle = "#ddd"; ctx.lineWidth = 0.5;
+        ctx.beginPath(); ctx.moveTo(W + 8, yy); ctx.lineTo(W + PANEL - 8, yy); ctx.stroke();
       };
 
-      let y = 65;
-      ctx.strokeStyle = "#ddd"; ctx.lineWidth = 0.5;
-      ctx.beginPath(); ctx.moveTo(W, 60); ctx.lineTo(W + PANEL, 60); ctx.stroke();
+      // ── Field helper (returns new y)
+      const field = (label, value, yy) => {
+        ctx.fillStyle = "#888";
+        ctx.font = "8px Arial";
+        ctx.fillText(label.toUpperCase(), W + 10, yy);
+        yy += 13;
+        ctx.fillStyle = "#111";
+        ctx.font = "10px Arial";
+        const words = String(value || "—").split(" ");
+        let line = "";
+        words.forEach(w => {
+          const test = line + (line ? " " : "") + w;
+          if (ctx.measureText(test).width > PANEL - 22) {
+            ctx.fillText(line, W + 10, yy); yy += 13; line = w;
+          } else line = test;
+        });
+        if (line) { ctx.fillText(line, W + 10, yy); yy += 13; }
+        return yy + 4;
+      };
 
-      y = field("Title:", title, y) + 4;
-      ctx.beginPath(); ctx.moveTo(W, y); ctx.lineTo(W + PANEL, y); ctx.stroke(); y += 8;
-      y = field("Project:", project || "—", y) + 4;
-      ctx.beginPath(); ctx.moveTo(W, y); ctx.lineTo(W + PANEL, y); ctx.stroke(); y += 8;
-      y = field("Date:", new Date().toLocaleDateString("en-GB"), y) + 4;
-      ctx.beginPath(); ctx.moveTo(W, y); ctx.lineTo(W + PANEL, y); ctx.stroke(); y += 8;
+      let y = 68;
+      divider(64);
+      y = field("Title", title, y);
+      divider(y); y += 8;
+      y = field("Project", project, y);
+      divider(y); y += 8;
+      y = field("Date", new Date().toLocaleDateString("en-GB"), y);
+      divider(y); y += 8;
+      y = field("Scale", "Not to fixed scale", y);
+      divider(y); y += 12;
 
       // ── Legend
-      y = field("Legend:", "", y) + 2;
-      const legendItems = [
-        { color: "#ff8800", label: "Buffer" },
-        { color: "#cc0000", label: "Red Line Boundary" },
-        { color: "#1a3d2b", label: "SSSI / SAC / SPA / Ramsar" },
-        { color: "#2d6a4f", label: "NNR / LNR" },
-        { color: "#1a5da0", label: "AONB / National Park" },
-        { color: "#52b788", label: "Ancient Woodland" },
-      ];
-      legendItems.forEach(item => {
-        ctx.fillStyle = item.color;
-        ctx.fillRect(W + 10, y - 8, 14, 10);
-        ctx.strokeStyle = "#888"; ctx.lineWidth = 0.5;
-        ctx.strokeRect(W + 10, y - 8, 14, 10);
-        ctx.fillStyle = "#000";
-        ctx.font = "10px Arial";
-        ctx.fillText(item.label, W + 28, y);
-        y += 16;
-      });
-
-      // ── North arrow (simple text)
-      y += 8;
-      ctx.fillStyle = "#000";
-      ctx.font = "bold 18px Arial";
-      ctx.fillText("↑", W + PANEL/2 - 6, y + 18);
-      ctx.font = "9px Arial";
-      ctx.fillText("N", W + PANEL/2 - 3, y + 30);
-
-      // ── OS Copyright
       ctx.fillStyle = "#888";
       ctx.font = "8px Arial";
-      const copy = `© Crown copyright ${new Date().getFullYear()} OS`;
-      ctx.fillText(copy, W + 10, H - 10);
+      ctx.fillText("LEGEND", W + 10, y);
+      y += 12;
 
-      // ── Export as image
-      const ext = format === "jpg" ? "jpeg" : "png";
-      const mime = `image/${ext}`;
-      const dataUrl = canvas.toDataURL(mime, 0.92);
+      mt.legend.forEach(item => {
+        // Swatch
+        if (item.dash) {
+          // Dashed outline swatch
+          ctx.strokeStyle = item.color;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 3]);
+          ctx.strokeRect(W + 10, y - 9, 16, 11);
+          ctx.setLineDash([]);
+          ctx.fillStyle = item.color.replace("rgb", "rgba").replace(")", ",0.06)");
+          ctx.fillRect(W + 10, y - 9, 16, 11);
+        } else {
+          ctx.fillStyle = item.color;
+          ctx.fillRect(W + 10, y - 9, 16, 11);
+          ctx.strokeStyle = "#888"; ctx.lineWidth = 0.5;
+          ctx.strokeRect(W + 10, y - 9, 16, 11);
+        }
+        ctx.fillStyle = "#111";
+        ctx.font = "10px Arial";
+        // Wrap long legend labels
+        const words = item.label.split(" ");
+        let line = "", ly = y;
+        words.forEach(w => {
+          const test = line + (line ? " " : "") + w;
+          if (ctx.measureText(test).width > PANEL - 38) {
+            ctx.fillText(line, W + 30, ly); ly += 12; line = w;
+          } else line = test;
+        });
+        ctx.fillText(line, W + 30, ly);
+        y = ly + 16;
+      });
 
-      // Create download link
+      divider(y); y += 12;
+
+      // ── North arrow
+      ctx.save();
+      ctx.translate(W + PANEL/2, y + 30);
+      ctx.fillStyle = "#111";
+      ctx.font = "bold 28px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("↑", 0, 0);
+      ctx.font = "10px Arial";
+      ctx.fillText("N", 0, 16);
+      ctx.textAlign = "left";
+      ctx.restore();
+      y += 56;
+
+      divider(y); y += 8;
+
+      // ── OS Copyright at bottom
+      ctx.fillStyle = "#888";
+      ctx.font = "7px Arial";
+      const copyLines = [
+        "Base Maps: © Crown copyright and",
+        `database rights ${new Date().getFullYear()} Ordnance Survey`,
+      ];
+      copyLines.forEach(l => { ctx.fillText(l, W + 10, H - (copyLines.length - copyLines.indexOf(l)) * 11); });
+
+      // ── Download
+      const mime = format === "jpg" ? "image/jpeg" : "image/png";
+      const dataUrl = canvas.toDataURL(mime, 0.93);
       const a = document.createElement("a");
       a.href = dataUrl;
-      a.download = `${title.replace(/[^a-z0-9]/gi,"_")}.${format === "jpg" ? "jpg" : "png"}`;
+      a.download = `${title.replace(/[^a-z0-9]/gi, "_").slice(0,60)}.${format}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -3325,11 +3500,14 @@ require([
 </script>
 <!-- ── Print Map Modal ───────────────────────────────────────────────────── -->
 <div id="printModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:10px;padding:24px;width:360px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.25);font-family:'Georgia',serif;">
-    <h3 style="margin:0 0 16px;font-size:15px;color:#1a3d2b;">Export Map Options</h3>
+  <div style="background:#fff;border-radius:10px;padding:24px;width:400px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.25);font-family:'Georgia',serif;max-height:90vh;overflow-y:auto;">
+    <h3 style="margin:0 0 16px;font-size:15px;color:#1a3d2b;">Export Map</h3>
+
+    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:6px;">Map Type</label>
+    <div id="pmMapTypes" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;"></div>
 
     <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Map Title</label>
-    <input id="pmTitle" type="text" placeholder="Protected Sites Within Xkm"
+    <input id="pmTitle" type="text"
       style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;"/>
 
     <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Project Name</label>

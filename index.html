@@ -740,6 +740,7 @@
           <span>Desk Study Report</span>
           <div class="report-actions">
             <button class="report-action-btn" id="btnExport" onclick="exportToWord()">&#x1F4C4; Export to Word</button>
+            <button class="report-action-btn" id="btnPrintMap" onclick="openPrintModal()">&#x1F5FA; Export Map</button>
             <button class="report-action-btn" onclick="resetTool()">Reset</button>
           </div>
         </div>
@@ -2142,6 +2143,9 @@ require([
 
     hideProgress();
     renderLayerList(results);
+    window._lastResults = results;
+    window._lastBuffers = buffers;
+    window._lastSiteName = document.getElementById("btnSelectLabel").textContent.replace("✓ ", "") || "";
 
     // Await JNCC in parallel — by now it will usually already be done
     setStatus("running", "Finalising report…");
@@ -2411,7 +2415,7 @@ require([
       html += P(`${statRows.length} statutory designated site${statRows.length !== 1 ? "s" : ""} for nature conservation ${statRows.length !== 1 ? "were" : "was"} identified during the desk study (${parts.join("; ")}) and ${statRows.length !== 1 ? "are" : "is"} summarised in Table 1 below.`);
       html += `<p><strong>Table 1: Summary of Statutory Designated Sites for Nature Conservation</strong></p>
       <table><thead><tr><th>Site Name</th><th>Size, Distance and Direction from Site</th><th>Reason for Designation</th><th>Importance</th></tr></thead><tbody>`;
-      for (const row of statRows) {
+      for (const row of statRows.filter(r => r.imp !== "Local")) {
         const sizeStr = row.ha ? `${row.ha} hectares<br>` : "";
         const distText = locStr(row.distM, row.dir);
         // Ensure "approx." prefix and capitalise first letter
@@ -3146,7 +3150,212 @@ require([
     document.getElementById("btnRunLabel").textContent = "Run Desk Study";
   }
 
+  // ── Export Map ────────────────────────────────────────────────────────────
+  const PRINT_URL = "https://utility.arcgisonline.com/arcgis/rest/services/Utilities/PrintingTools/GPServer/Export%20Web%20Map%20Task";
+
+  window.openPrintModal = function() {
+    // Pre-fill title from current LAD results if available
+    const ladResult = Object.values(window._lastResults || {}).find(r => r?.cfg?.type === "lad");
+    const ladName = ladResult?.names?.[0] || "";
+    const bufferKm = Object.values(window._lastBuffers || {}).reduce((max, v) => Math.max(max, v), 0);
+    document.getElementById("pmTitle").value =
+      `Protected Sites Within ${bufferKm > 0 ? bufferKm + "km" : "Buffer"}` +
+      (ladName ? ` — ${ladName}` : "");
+    document.getElementById("pmProject").value = window._lastSiteName || "";
+    document.getElementById("pmStatus").style.display = "none";
+    document.getElementById("pmBtn").disabled = false;
+    document.getElementById("pmBtn").textContent = "Export";
+    document.getElementById("printModal").style.display = "flex";
+  };
+
+  window.closePrintModal = function() {
+    document.getElementById("printModal").style.display = "none";
+  };
+
+  window.executePrint = async function() {
+    const btn = document.getElementById("pmBtn");
+    const status = document.getElementById("pmStatus");
+    btn.disabled = true;
+    btn.textContent = "Capturing…";
+    status.innerHTML = "";
+    status.style.display = "block";
+    status.style.color = "#1a5da0";
+    status.textContent = "⏳ Capturing map…";
+
+    const title   = document.getElementById("pmTitle").value || "Protected Sites";
+    const project = document.getElementById("pmProject").value || "";
+    const format  = document.getElementById("pmFormat").value;
+
+    try {
+      // Take screenshot of the current map view
+      const screenshot = await view.takeScreenshot({ format: "png", quality: 95 });
+
+      status.textContent = "⏳ Composing map image…";
+
+      // Create a canvas to composite map + title block
+      const mapImg = new Image();
+      await new Promise((res, rej) => {
+        mapImg.onload = res;
+        mapImg.onerror = rej;
+        mapImg.src = screenshot.dataUrl;
+      });
+
+      const W = mapImg.width;
+      const H = mapImg.height;
+      const PANEL = 220; // width of title block panel on right
+      const canvas = document.createElement("canvas");
+      canvas.width  = W + PANEL;
+      canvas.height = H;
+      const ctx = canvas.getContext("2d");
+
+      // ── Draw map
+      ctx.drawImage(mapImg, 0, 0);
+
+      // ── Title block panel background
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(W, 0, PANEL, H);
+      ctx.strokeStyle = "#555";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(W, 0, PANEL, H);
+
+      // ── C&W branding header
+      ctx.fillStyle = "#1a3d2b";
+      ctx.fillRect(W, 0, PANEL, 48);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 13px Arial";
+      ctx.fillText("CLARKSON", W + 10, 20);
+      ctx.fillText("& WOODS", W + 10, 36);
+      ctx.font = "9px Arial";
+      ctx.fillText("ECOLOGICAL CONSULTANTS", W + 10, 48);
+
+      // ── Title block fields
+      const field = (label, value, y) => {
+        ctx.fillStyle = "#555";
+        ctx.font = "9px Arial";
+        ctx.fillText(label, W + 10, y);
+        ctx.fillStyle = "#000";
+        ctx.font = "11px Arial";
+        // Word-wrap value
+        const words = String(value).split(" ");
+        let line = "", ly = y + 14;
+        words.forEach(w => {
+          const test = line + (line ? " " : "") + w;
+          if (ctx.measureText(test).width > PANEL - 20) {
+            ctx.fillText(line, W + 10, ly); ly += 13; line = w;
+          } else { line = test; }
+        });
+        if (line) ctx.fillText(line, W + 10, ly);
+        return ly + 8;
+      };
+
+      let y = 65;
+      ctx.strokeStyle = "#ddd"; ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(W, 60); ctx.lineTo(W + PANEL, 60); ctx.stroke();
+
+      y = field("Title:", title, y) + 4;
+      ctx.beginPath(); ctx.moveTo(W, y); ctx.lineTo(W + PANEL, y); ctx.stroke(); y += 8;
+      y = field("Project:", project || "—", y) + 4;
+      ctx.beginPath(); ctx.moveTo(W, y); ctx.lineTo(W + PANEL, y); ctx.stroke(); y += 8;
+      y = field("Date:", new Date().toLocaleDateString("en-GB"), y) + 4;
+      ctx.beginPath(); ctx.moveTo(W, y); ctx.lineTo(W + PANEL, y); ctx.stroke(); y += 8;
+
+      // ── Legend
+      y = field("Legend:", "", y) + 2;
+      const legendItems = [
+        { color: "#ff8800", label: "Buffer" },
+        { color: "#cc0000", label: "Red Line Boundary" },
+        { color: "#1a3d2b", label: "SSSI / SAC / SPA / Ramsar" },
+        { color: "#2d6a4f", label: "NNR / LNR" },
+        { color: "#1a5da0", label: "AONB / National Park" },
+        { color: "#52b788", label: "Ancient Woodland" },
+      ];
+      legendItems.forEach(item => {
+        ctx.fillStyle = item.color;
+        ctx.fillRect(W + 10, y - 8, 14, 10);
+        ctx.strokeStyle = "#888"; ctx.lineWidth = 0.5;
+        ctx.strokeRect(W + 10, y - 8, 14, 10);
+        ctx.fillStyle = "#000";
+        ctx.font = "10px Arial";
+        ctx.fillText(item.label, W + 28, y);
+        y += 16;
+      });
+
+      // ── North arrow (simple text)
+      y += 8;
+      ctx.fillStyle = "#000";
+      ctx.font = "bold 18px Arial";
+      ctx.fillText("↑", W + PANEL/2 - 6, y + 18);
+      ctx.font = "9px Arial";
+      ctx.fillText("N", W + PANEL/2 - 3, y + 30);
+
+      // ── OS Copyright
+      ctx.fillStyle = "#888";
+      ctx.font = "8px Arial";
+      const copy = `© Crown copyright ${new Date().getFullYear()} OS`;
+      ctx.fillText(copy, W + 10, H - 10);
+
+      // ── Export as image
+      const ext = format === "jpg" ? "jpeg" : "png";
+      const mime = `image/${ext}`;
+      const dataUrl = canvas.toDataURL(mime, 0.92);
+
+      // Create download link
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `${title.replace(/[^a-z0-9]/gi,"_")}.${format === "jpg" ? "jpg" : "png"}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      status.style.color = "#1a3d2b";
+      status.textContent = "✓ Map downloaded successfully.";
+      btn.disabled = false;
+      btn.textContent = "Export Again";
+
+    } catch(e) {
+      console.error("Map export failed:", e);
+      status.style.color = "#c00";
+      status.textContent = `✗ Export failed: ${e.message || e}`;
+      btn.disabled = false;
+      btn.textContent = "Export";
+    }
+  };
+
 }); // end require
 </script>
+<!-- ── Print Map Modal ───────────────────────────────────────────────────── -->
+<div id="printModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:10px;padding:24px;width:360px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.25);font-family:'Georgia',serif;">
+    <h3 style="margin:0 0 16px;font-size:15px;color:#1a3d2b;">Export Map Options</h3>
+
+    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Map Title</label>
+    <input id="pmTitle" type="text" placeholder="Protected Sites Within Xkm"
+      style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;"/>
+
+    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Project Name</label>
+    <input id="pmProject" type="text" placeholder="e.g. Land at Church Farm"
+      style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:12px;box-sizing:border-box;"/>
+
+    <label style="font-size:11px;color:#6b7c6f;display:block;margin-bottom:4px;">Format</label>
+    <select id="pmFormat" style="width:100%;padding:6px 8px;border:1px solid #c9dece;border-radius:5px;font-family:'Georgia',serif;font-size:12px;margin-bottom:16px;box-sizing:border-box;">
+      <option value="jpg">JPG</option>
+      <option value="png">PNG</option>
+    </select>
+
+    <div id="pmStatus" style="font-size:11px;color:#1a5da0;margin-bottom:12px;display:none;"></div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="closePrintModal()"
+        style="padding:7px 16px;border:1px solid #c9dece;border-radius:5px;background:#fff;font-family:'Georgia',serif;font-size:12px;cursor:pointer;color:#3a4a3e;">
+        Cancel
+      </button>
+      <button id="pmBtn" onclick="executePrint()"
+        style="padding:7px 16px;border:none;border-radius:5px;background:#1a3d2b;color:#fff;font-family:'Georgia',serif;font-size:12px;cursor:pointer;font-weight:bold;">
+        Export
+      </button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

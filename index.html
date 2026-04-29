@@ -3346,13 +3346,22 @@ require([
         try { return Array.from(l); } catch(e) { return []; }
       };
 
-      const setLayerVisibility = (layers, showTypes) => {
-        toArr(layers).forEach(layer => {
-          if (layer.type === "group" && layer.layers) {
-            setLayerVisibility(layer.layers, showTypes);
-            layer.visible = toArr(layer.layers).some(l => l.visible);
-            return;
-          }
+      // Flatten entire layer tree into a single array
+      const flatLayers = [];
+      const flattenLayers = (layers) => {
+        toArr(layers).forEach(l => {
+          flatLayers.push(l);
+          if (l.type === "group" && l.layers) flattenLayers(l.layers);
+        });
+      };
+      flattenLayers(webMap.layers);
+
+      // Save / restore / set visibility on the flat list
+      const saveVisibility  = () => new Map(flatLayers.map(l => [l.id, l.visible]));
+      const restoreVisibility = (state) => flatLayers.forEach(l => { if (state.has(l.id)) l.visible = state.get(l.id); });
+      const setLayerVisibility = (showTypes) => {
+        flatLayers.forEach(layer => {
+          if (layer.type === "group") return; // handle groups after leaves
           const cfg = CONFIG.layers.find(c => c.title === layer.title);
           if (cfg) {
             layer.visible = showTypes.includes(cfg.type);
@@ -3362,30 +3371,15 @@ require([
             layer.visible = false;
           }
         });
-      };
-
-      const saveVisibility = (layers) => {
-        const state = new Map();
-        toArr(layers).forEach(layer => {
-          state.set(layer.id, layer.visible);
-          if (layer.type === "group" && layer.layers) {
-            const childState = saveVisibility(layer.layers);
-            childState.forEach((v, k) => state.set(k, v));
-          }
-        });
-        return state;
-      };
-
-      const restoreVisibility = (layers, state) => {
-        toArr(layers).forEach(layer => {
-          if (state.has(layer.id)) layer.visible = state.get(layer.id);
-          if (layer.type === "group" && layer.layers) restoreVisibility(layer.layers, state);
+        // Set each group visible if any of its direct children are visible
+        flatLayers.filter(l => l.type === "group" && l.layers).forEach(group => {
+          group.visible = toArr(group.layers).some(l => l.visible);
         });
       };
 
       // ── Save, set visibility ──────────────────────────────────────────────
-      origVisibility = saveVisibility(webMap.layers);
-      setLayerVisibility(webMap.layers, mt.visibleTypes || ["statutory"]);
+      origVisibility = saveVisibility();
+      setLayerVisibility(mt.visibleTypes || ["statutory"]);
 
       // ── Zoom tightly to buffer ────────────────────────────────────────────
       if (mt.bufGeom) {
@@ -3398,7 +3392,7 @@ require([
       const screenshot = await view.takeScreenshot({ format: "png", quality: 95 });
 
       // ── Restore visibility immediately after screenshot ───────────────────
-      restoreVisibility(webMap.layers, origVisibility);
+      restoreVisibility(origVisibility);
 
       status.textContent = "⏳ Composing image…";
 
@@ -3553,7 +3547,7 @@ require([
 
     } catch(e) {
       console.error("Map export failed:", e);
-      if (origVisibility) try { restoreVisibility(webMap.layers, origVisibility); } catch(_) {}
+      if (origVisibility) try { restoreVisibility(origVisibility); } catch(_) {}
       status.style.color = "#c00";
       status.textContent = `✗ Export failed: ${e.message || e}`;
       btn.disabled = false;

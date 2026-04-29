@@ -1785,16 +1785,14 @@ require([
       if (drawnKm.has(km)) return;
       drawnKm.add(km);
 
-      // Fill + outline ring
       const fillG = new Graphic({
         geometry: geom,
         symbol: { type: "simple-fill", ...bufferStyles[cat] },
-        attributes: { type: "ecologicalBuffer" },
+        attributes: { type: "ecologicalBuffer", bufCat: cat },
       });
       view.graphics.add(fillG);
       bufferGraphic.push(fillG);
 
-      // Text label at the top of each ring
       const ext = geom.extent;
       if (ext) {
         const labelG = new Graphic({
@@ -1808,7 +1806,7 @@ require([
             font: { size: 10, family: "sans-serif" },
             verticalAlignment: "bottom",
           },
-          attributes: { type: "ecologicalBuffer" },
+          attributes: { type: "ecologicalBuffer", bufCat: cat },
         });
         view.graphics.add(labelG);
         bufferGraphic.push(labelG);
@@ -3165,7 +3163,6 @@ require([
     const ladResult = Object.values(results).find(r => r?.cfg?.type === "lad");
     const ladName = ladResult?.names?.[0] || "";
 
-    // ── Build available map types from what was found ──────────────────────
     _mapTypes = [];
 
     const bufferStyles = {
@@ -3176,74 +3173,71 @@ require([
     };
     const catLabels = { international: "International", national: "National", local: "Local", records: "Records" };
 
-    // One map per unique buffer distance (excluding records)
-    const catOrder = ["international", "national", "local", "records"];
-    const seenKm = new Set();
-    catOrder.forEach(cat => {
+    // Build a set of layer titles assigned to each category (using layerAssignments)
+    const titlesByCat = { international: [], national: [], local: [], records: [] };
+    CONFIG.layers.forEach(cfg => {
+      const cat = layerAssignments[cfg.title] || defaultCategory(cfg);
+      if (titlesByCat[cat]) titlesByCat[cat].push(cfg.title);
+    });
+
+    // One map per category (skip if no buffer distance set)
+    ["international", "national", "local", "records"].forEach(cat => {
       const km = buffers[cat];
-      if (!km || seenKm.has(km)) return;
-      seenKm.add(km);
+      if (!km) return;
 
-      // Which layer types belong to this buffer?
-      const layerTypes = {
-        international: ["statutory"],
-        national:      ["statutory", "habitat", "river", "bat"],
-        local:         ["statutory"],
-        records:       ["records"],
-      }[cat] || [];
+      // Layers assigned to this category
+      const layerTitles = titlesByCat[cat];
 
-      const foundLayers = Object.values(results).filter(r =>
-        r?.status === "found" && layerTypes.includes(r.cfg?.type) &&
-        (window._lastBuffers?.[Object.keys(window._lastBuffers||{}).find(k =>
-          window._lastBuffers[k] === km)] === km || r.bufKm === km)
-      );
-
-      // Legend items for this map
+      // Legend — always buffer + RLB, then found layers
+      const col = `rgb(${bufferStyles[cat].outline.join(",")})`;
       const legend = [
-        { color: `rgb(${bufferStyles[cat]?.outline?.join(",") || "100,100,100"})`, label: `${km}km buffer (${catLabels[cat]})`, dash: true },
+        { color: col, label: `${km}km buffer (${catLabels[cat]})`, dash: true },
         { color: "#c1121f", label: "Red Line Boundary" },
       ];
-      if (cat === "international" || cat === "national") {
-        legend.push(
-          { color: "#1a3d2b", label: "SSSI / SAC / SPA / Ramsar" },
-          { color: "#2d6a4f", label: "NNR / LNR" },
-        );
-      }
-      if (cat === "national" || cat === "local") {
-        legend.push({ color: "#1a5da0", label: "AONB / National Park" });
-      }
-      if (cat === "national") {
-        legend.push(
-          { color: "#52b788", label: "Ancient Woodland" },
-          { color: "#95d5b2", label: "Priority Habitat" },
-        );
-      }
-      if (cat === "records") {
-        legend.push({ color: "#8338ec", label: "Biodiversity Records" });
-      }
+      // Add legend entries for found layers in this category
+      const foundInCat = layerTitles
+        .map(t => results[t])
+        .filter(r => r?.status === "found");
+      const typesSeen = new Set();
+      foundInCat.forEach(r => {
+        const type = r.cfg?.type;
+        if (typesSeen.has(type)) return;
+        typesSeen.add(type);
+        if (type === "statutory")  legend.push({ color: "#1a3d2b", label: "Designated Sites" });
+        if (type === "habitat")    legend.push({ color: "#52b788", label: "Priority Habitats" });
+        if (type === "river")      legend.push({ color: "#0077b6", label: "River Habitats" });
+        if (type === "bat")        legend.push({ color: "#6a0572", label: "Bat Consultation Zones" });
+        if (type === "records")    legend.push({ color: "#8338ec", label: "Biodiversity Records" });
+      });
 
       _mapTypes.push({
         key: cat,
-        label: `${catLabels[cat]} Designations (${km}km buffer)`,
-        title: `${catLabels[cat]} Designated Sites Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
+        label: `${catLabels[cat]} (${km}km buffer)`,
+        title: `${catLabels[cat]} Designations Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
         bufKm: km,
         bufGeom: bufGeoms[cat],
+        bufCat: cat,            // which single buffer ring to show
+        layerTitles,            // exact titles visible on this map
         legend,
       });
     });
 
-    // Habitats map (national buffer)
-    const habFound = Object.values(results).filter(r => r?.status === "found" && r.cfg?.type === "habitat");
-    if (habFound.length) {
-      const km = buffers.national;
+    // Habitats-only map
+    const habTitles = CONFIG.layers
+      .filter(cfg => cfg.type === "habitat")
+      .map(cfg => cfg.title);
+    const habFound = habTitles.some(t => results[t]?.status === "found");
+    if (habFound) {
+      const cat = "national";
+      const km = buffers[cat];
       _mapTypes.push({
         key: "habitats",
-        label: `Habitats (${km}km buffer)`,
+        label: `Habitats only (${km}km buffer)`,
         title: `Priority and Designated Habitats Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
-        bufKm: km,
-        bufGeom: bufGeoms.national,
+        bufKm: km, bufGeom: bufGeoms[cat], bufCat: cat,
+        layerTitles: habTitles,
         legend: [
-          { color: `rgb(${bufferStyles.national.outline.join(",")})`, label: `${km}km buffer`, dash: true },
+          { color: `rgb(${bufferStyles[cat].outline.join(",")})`, label: `${km}km buffer`, dash: true },
           { color: "#c1121f", label: "Red Line Boundary" },
           { color: "#52b788", label: "Ancient Woodland" },
           { color: "#95d5b2", label: "Priority Habitat Inventory" },
@@ -3251,49 +3245,37 @@ require([
       });
     }
 
-    // Records map
-    const recFound = Object.values(results).filter(r => r?.status === "found" && r.cfg?.type === "records");
-    if (recFound.length) {
-      const km = buffers.records;
+    // Records-only map
+    const recTitles = CONFIG.layers
+      .filter(cfg => cfg.type === "records")
+      .map(cfg => cfg.title);
+    const recFound = recTitles.some(t => results[t]?.status === "found");
+    if (recFound) {
+      const cat = "records";
+      const km = buffers[cat];
       _mapTypes.push({
-        key: "records",
-        label: `Biodiversity Records (${km}km buffer)`,
+        key: "records-only",
+        label: `Biodiversity Records only (${km}km buffer)`,
         title: `Biodiversity Records Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
-        bufKm: km,
-        bufGeom: bufGeoms.records,
+        bufKm: km, bufGeom: bufGeoms[cat], bufCat: cat,
+        layerTitles: recTitles,
         legend: [
-          { color: `rgb(${bufferStyles.records.outline.join(",")})`, label: `${km}km buffer`, dash: true },
+          { color: `rgb(${bufferStyles[cat].outline.join(",")})`, label: `${km}km buffer`, dash: true },
           { color: "#c1121f", label: "Red Line Boundary" },
           { color: "#8338ec", label: "Biodiversity Records" },
         ],
       });
     }
 
-      // Which layer cfg.types should be visible on each map type
-      const typeVisibility = {
-        international: ["statutory"],
-        national:      ["statutory", "habitat", "river", "bat"],
-        local:         ["statutory"],
-        records:       ["records"],
-        habitats:      ["habitat"],
-        all:           ["statutory", "habitat", "river", "bat", "records"],
-      };
-
-      _mapTypes.forEach((mt, i) => {
-        mt.visibleTypes = typeVisibility[mt.key] || ["statutory"];
-      });
     if (_mapTypes.length === 0) {
       _mapTypes.push({
-        key: "all",
-        label: "Current map view",
-        title: "Desk Study Map",
-        bufKm: null,
-        bufGeom: null,
+        key: "all", label: "Current map view", title: "Desk Study Map",
+        bufKm: null, bufGeom: null, bufCat: null, layerTitles: [],
         legend: [{ color: "#c1121f", label: "Red Line Boundary" }],
       });
     }
 
-    // ── Build radio buttons ─────────────────────────────────────────────────
+    // ── Build radio buttons
     const container = document.getElementById("pmMapTypes");
     container.innerHTML = "";
     _mapTypes.forEach((mt, i) => {
@@ -3338,6 +3320,7 @@ require([
     const format  = document.getElementById("pmFormat").value;
 
     let origVisibility = null;
+    let hiddenGraphics = [];
     try {
       const toArr = l => {
         if (!l) return [];
@@ -3365,18 +3348,24 @@ require([
         if (!state || typeof state !== "object") return;
         flatLayers.forEach(l => { if (l && l.id != null && l.id in state) l.visible = state[l.id]; });
       };
-      const setLayerVisibility = (showTypes) => {
+      const setLayerVisibility = (mt) => {
+        const allowedTitles = new Set(mt.layerTitles || []);
         flatLayers.forEach(layer => {
           if (!layer || layer.type === "group") return;
-          const cfg = CONFIG.layers.find(c => c.title === layer.title);
-          if (cfg) {
-            layer.visible = showTypes.includes(cfg.type);
-          } else if (CONFIG.redLineTitlePattern?.test(layer.title)) {
+          // Always show OSM / Streets basemap-style layer
+          if (/openstreetmap|osm|streets/i.test(layer.title)) {
             layer.visible = true;
-          } else {
-            layer.visible = false;
+            return;
           }
+          // Always show red line boundary
+          if (CONFIG.redLineTitlePattern?.test(layer.title)) {
+            layer.visible = true;
+            return;
+          }
+          // Show only layers in this map type's title set
+          layer.visible = allowedTitles.has(layer.title);
         });
+        // Groups: visible if any child is visible
         flatLayers.filter(l => l && l.type === "group" && l.layers).forEach(group => {
           group.visible = toArr(group.layers).some(l => l && l.visible);
         });
@@ -3384,7 +3373,23 @@ require([
 
       // ── Save, set visibility ──────────────────────────────────────────────
       origVisibility = saveVisibility();
-      setLayerVisibility(mt.visibleTypes || ["statutory"]);
+      setLayerVisibility(mt);
+
+      // Hide buffer rings that don't belong to this map type — show only the relevant one
+      // bufferGraphic entries have no direct cat tag, so hide all then show matching by km
+      const bufKmToShow = mt.bufKm;
+      const hiddenGraphics = [];
+      if (bufferGraphic && Array.isArray(bufferGraphic)) {
+        bufferGraphic.forEach(g => {
+          // Check the graphic's symbol text or size to match the buffer km
+          // We tag graphics by their layer via attributes.bufCat set at draw time
+          const gCat = g.attributes?.bufCat;
+          if (gCat && gCat !== mt.bufCat) {
+            g.visible = false;
+            hiddenGraphics.push(g);
+          }
+        });
+      }
 
       // ── Zoom tightly to buffer ────────────────────────────────────────────
       if (mt.bufGeom) {
@@ -3396,8 +3401,9 @@ require([
       status.textContent = "⏳ Capturing map…";
       const screenshot = await view.takeScreenshot({ format: "png", quality: 95 });
 
-      // ── Restore visibility immediately after screenshot ───────────────────
+      // Restore layer visibility and buffer rings
       restoreVisibility(origVisibility);
+      hiddenGraphics.forEach(g => { g.visible = true; });
 
       status.textContent = "⏳ Composing image…";
 
@@ -3553,6 +3559,7 @@ require([
     } catch(e) {
       console.error("Map export failed:", e);
       if (origVisibility) try { restoreVisibility(origVisibility); } catch(_) {}
+      try { hiddenGraphics.forEach(g => { g.visible = true; }); } catch(_) {}
       status.style.color = "#c00";
       status.textContent = `✗ Export failed: ${e.message || e}`;
       btn.disabled = false;

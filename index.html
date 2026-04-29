@@ -312,7 +312,14 @@
       0%,100% { box-shadow: 0 0 0 0 rgba(233,196,106,.4); }
       50%      { box-shadow: 0 0 0 5px rgba(233,196,106,0); }
     }
-    .btn-run {
+    .btn-import {
+      background: var(--surface);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .btn-import .step-num { background: #e8f0fb; color: #1a3a6b; }
+    .btn-import:hover:not(:disabled) { border-color: #1a3a6b; color: #1a3a6b; }
+    .btn-import.active { border-color: #1a3a6b; background: #e8f0fb; color: #1a3a6b; }
       background: var(--green-mid);
       color: #fff;
       border-color: var(--green-mid);
@@ -721,6 +728,27 @@
         <span class="step-num">2</span>
         <span id="btnRunLabel">Run Desk Study</span>
       </button>
+
+      <button class="step-btn btn-import" id="btnImport" onclick="openImportModal()" style="display:none">
+        <span class="step-num">3</span>
+        <span id="btnImportLabel">Import Species Records</span>
+      </button>
+
+      <!-- Import filter controls -->
+      <div id="importFilters" style="display:none;margin-bottom:10px;">
+        <div class="section-label" style="margin-top:10px;">Record Filters</div>
+        <div style="display:flex;flex-direction:column;gap:5px;">
+          <input id="filterTaxon" type="text" placeholder="Filter by taxon…"
+            style="padding:4px 8px;border:1px solid var(--line);border-radius:4px;font-size:11px;font-family:'Georgia',serif;"
+            oninput="applyRecordFilters()"/>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <input id="filterDateFrom" type="date" style="flex:1;padding:4px;border:1px solid var(--line);border-radius:4px;font-size:11px;" oninput="applyRecordFilters()"/>
+            <span style="font-size:10px;color:var(--ink-faint)">to</span>
+            <input id="filterDateTo" type="date" style="flex:1;padding:4px;border:1px solid var(--line);border-radius:4px;font-size:11px;" oninput="applyRecordFilters()"/>
+          </div>
+          <div style="font-size:10px;color:var(--ink-faint);text-align:right;" id="recordCount"></div>
+        </div>
+      </div>
 
       <!-- Progress -->
       <div class="progress-wrap" id="progressWrap">
@@ -2156,6 +2184,7 @@ require([
     setStatus("info", `✓ Screening complete — ${CONFIG.layers.filter(l => results[l.title]?.status === "found").length} layer(s) with intersecting features.`);
     resetRunButton();
     document.getElementById("btnReset").style.display = "block";
+    showImportButton();
   };
 
   // ── Layer results list ────────────────────────────────────────────────────
@@ -3104,6 +3133,8 @@ require([
     if (full) {
       selectedGeom = null;
       drawLayer.removeAll();
+      clearImportGraphics();
+      _allImportRecords = [];
       if (bufferGraphic) {
         (Array.isArray(bufferGraphic) ? bufferGraphic : [bufferGraphic])
           .forEach(g => { try { view.graphics.remove(g); } catch(e) {} });
@@ -3111,7 +3142,10 @@ require([
       }
       document.getElementById("btnSelect").classList.remove("selecting", "selected");
       document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
-      document.getElementById("btnDraw").classList.remove("drawing", "selected");
+      document.getElementById("btnImport").style.display = "none";
+      document.getElementById("btnImport").classList.remove("active");
+      document.getElementById("btnImportLabel").textContent = "Import Species Records";
+      document.getElementById("importFilters").style.display = "none";
       document.getElementById("btnDrawLabel").textContent = "Draw red line boundary";
       document.getElementById("btnRun").disabled = true;
       document.getElementById("btnRunLabel").textContent = "Run Desk Study";
@@ -3149,7 +3183,366 @@ require([
     document.getElementById("btnRunLabel").textContent = "Run Desk Study";
   }
 
-  // ── Export Map ────────────────────────────────────────────────────────────
+  // ── Import Species Records ────────────────────────────────────────────────
+
+  let _importRows   = [];    // parsed data rows (objects)
+  let _importCols   = [];    // column names/indices
+  let _importGraphics = [];  // Graphic objects on map
+  let _allImportRecords = []; // unfiltered plotted records for filtering
+
+  // Show Step 3 button after analysis runs
+  function showImportButton() {
+    document.getElementById("btnImport").style.display = "flex";
+  }
+
+  window.openImportModal = function() {
+    document.getElementById("importModal").style.display = "flex";
+    document.getElementById("importPaste").value = "";
+    document.getElementById("importParseStatus").textContent = "";
+    document.getElementById("importColMapping").style.display = "none";
+    document.getElementById("importConvertStatus").style.display = "none";
+    document.getElementById("importBtn").disabled = true;
+    document.getElementById("importPreview").innerHTML = "";
+    _importRows = []; _importCols = [];
+  };
+
+  window.closeImportModal = function() {
+    document.getElementById("importModal").style.display = "none";
+  };
+
+  // ── Parse pasted data ─────────────────────────────────────────────────────
+  window.parseImportData = function() {
+    const raw = document.getElementById("importPaste").value.trim();
+    if (!raw) { document.getElementById("importColMapping").style.display = "none"; return; }
+
+    // Auto-detect separator
+    const lines = raw.split(/\r?\n/).filter(l => l.trim());
+    const tabCount   = (lines[0].match(/\t/g) || []).length;
+    const commaCount = (lines[0].match(/,/g) || []).length;
+    const sep = tabCount >= commaCount ? "\t" : ",";
+
+    // Parse rows
+    const allRows = lines.map(l => l.split(sep).map(c => c.trim()));
+    const maxCols = Math.max(...allRows.map(r => r.length));
+
+    // Check if first row looks like headers (contains non-numeric strings)
+    const firstRow = allRows[0];
+    const hasHeaders = firstRow.some(c => isNaN(c) && c.length > 0 && !/^[A-Z]{1,2}\d{2,6}$/.test(c));
+
+    let headers, dataRows;
+    if (hasHeaders) {
+      headers = firstRow;
+      dataRows = allRows.slice(1);
+    } else {
+      headers = Array.from({ length: maxCols }, (_, i) => `Column ${i + 1}`);
+      dataRows = allRows;
+    }
+
+    _importCols = headers;
+    _importRows = dataRows.map(row => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = row[i] || ""; });
+      return obj;
+    });
+
+    const status = document.getElementById("importParseStatus");
+    status.textContent = `✓ Detected ${_importRows.length} rows, ${headers.length} columns (${sep === "\t" ? "tab" : "comma"} separated${hasHeaders ? ", with headers" : ", no headers detected"})`;
+    status.style.color = "#1a3d2b";
+
+    // Build preview table (first 5 rows)
+    const tbl = document.getElementById("importPreview");
+    tbl.innerHTML = "";
+    const thead = tbl.createTHead();
+    const hrow = thead.insertRow();
+    headers.forEach(h => {
+      const th = document.createElement("th");
+      th.textContent = h;
+      th.style.cssText = "background:#1a3d2b;color:#fff;padding:3px 8px;font-size:10px;white-space:nowrap;";
+      hrow.appendChild(th);
+    });
+    const tbody = tbl.createTBody();
+    _importRows.slice(0, 5).forEach(row => {
+      const tr = tbody.insertRow();
+      headers.forEach(h => {
+        const td = tr.insertCell();
+        td.textContent = row[h] || "";
+        td.style.cssText = "padding:2px 8px;font-size:10px;border:1px solid #c9dece;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis;";
+      });
+    });
+
+    // Populate column selects
+    const colOpts = `<option value="">— not used —</option>` +
+      headers.map((h, i) => `<option value="${h}">${h}</option>`).join("");
+    ["colTaxon","colCommon","colDate","colLoc1","colLoc2"].forEach(id => {
+      document.getElementById(id).innerHTML = colOpts;
+    });
+
+    // Auto-detect common columns
+    const autoMatch = (patterns) => headers.find(h => patterns.some(p => p.test(h))) || "";
+    const set = (id, val) => { if (val) document.getElementById(id).value = val; };
+    set("colTaxon",  autoMatch([/taxon|scientific|latin|species/i]));
+    set("colCommon", autoMatch([/common|name/i]));
+    set("colDate",   autoMatch([/date/i]));
+    set("colLoc1",   autoMatch([/grid.?ref|ngr|bng|gr\b/i]));
+    // Check if lat/lng detected
+    const hasLat = headers.some(h => /lat/i.test(h));
+    const hasLng = headers.some(h => /lon|lng/i.test(h));
+    if (hasLat && hasLng) {
+      document.getElementById("colLocType").value = "latlng";
+      set("colLoc1", autoMatch([/lat/i]));
+      set("colLoc2", autoMatch([/lon|lng/i]));
+    }
+    updateLocCols();
+
+    document.getElementById("importColMapping").style.display = "block";
+    document.getElementById("importBtn").disabled = false;
+  };
+
+  window.updateLocCols = function() {
+    const type = document.getElementById("colLocType").value;
+    const wrap2 = document.getElementById("locCol2Wrap");
+    const l1 = document.getElementById("locCol1Label");
+    const l2 = document.getElementById("locCol2Label");
+    if (type === "bng") {
+      l1.innerHTML = "Grid Reference column <span style='color:#c00;'>*</span>";
+      wrap2.style.display = "none";
+    } else if (type === "latlng") {
+      l1.innerHTML = "Latitude column <span style='color:#c00;'>*</span>";
+      l2.innerHTML = "Longitude column <span style='color:#c00;'>*</span>";
+      wrap2.style.display = "block";
+    } else { // xy
+      l1.innerHTML = "Easting column <span style='color:#c00;'>*</span>";
+      l2.innerHTML = "Northing column <span style='color:#c00;'>*</span>";
+      wrap2.style.display = "block";
+    }
+  };
+
+  // ── BNG Conversion (Helmert transformation OSGB36→WGS84) ─────────────────
+  // Accurate to ~5m — sufficient for ecological records
+  function bngToLatLng(gridRef) {
+    // Parse grid reference
+    gridRef = gridRef.trim().toUpperCase().replace(/\s+/g, "");
+    if (!gridRef) return null;
+
+    const letters = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
+    // Two-letter prefix
+    if (!/^[A-Z]{2}\d+$/.test(gridRef)) return null;
+
+    const l1 = gridRef.charCodeAt(0) - 65;
+    const l2 = gridRef.charCodeAt(1) - 65;
+    // Adjust for I
+    const adj = c => c >= 8 ? c - 1 : c;
+    const e500 = (adj(l1) % 5) * 5 + adj(l2) % 5;
+    const n500 = 19 - Math.floor(adj(l1) / 5) * 5 - Math.floor(adj(l2) / 5);
+
+    const digits = gridRef.slice(2);
+    const half = Math.floor(digits.length / 2);
+    if (half === 0) return null;
+    const factor = Math.pow(10, 5 - half);
+
+    const E = e500 * 100000 + parseInt(digits.slice(0, half)) * factor;
+    const N = n500 * 100000 + parseInt(digits.slice(half)) * factor;
+    // Add half-cell offset to get centroid
+    const offset = factor / 2;
+    return enToLatLng(E + offset, N + offset);
+  }
+
+  function enToLatLng(E, N) {
+    // Airy 1830 ellipsoid
+    const a = 6377563.396, b = 6356256.909;
+    const F0 = 0.9996012717;
+    const lat0 = 49 * Math.PI / 180;
+    const lon0 = -2 * Math.PI / 180;
+    const N0 = -100000, E0 = 400000;
+    const e2 = 1 - (b * b) / (a * a);
+    const n = (a - b) / (a + b);
+
+    let lat = lat0, M = 0;
+    do {
+      lat = (N - N0 - M) / (a * F0) + lat;
+      const Ma = (1 + n + 1.25 * n * n + 1.25 * n * n * n) * (lat - lat0);
+      const Mb = (3 * n + 3 * n * n + 2.625 * n * n * n) * Math.sin(lat - lat0) * Math.cos(lat + lat0);
+      const Mc = (1.875 * n * n + 1.875 * n * n * n) * Math.sin(2 * (lat - lat0)) * Math.cos(2 * (lat + lat0));
+      const Md = 0.729167 * n * n * n * Math.sin(3 * (lat - lat0)) * Math.cos(3 * (lat + lat0));
+      M = b * F0 * (Ma - Mb + Mc - Md);
+    } while (Math.abs(N - N0 - M) >= 0.00001);
+
+    const cosLat = Math.cos(lat), sinLat = Math.sin(lat), tanLat = Math.tan(lat);
+    const nu = a * F0 / Math.sqrt(1 - e2 * sinLat * sinLat);
+    const rho = a * F0 * (1 - e2) / Math.pow(1 - e2 * sinLat * sinLat, 1.5);
+    const eta2 = nu / rho - 1;
+    const dE = E - E0;
+
+    const VII = tanLat / (2 * rho * nu);
+    const VIII = tanLat / (24 * rho * nu * nu * nu) * (5 + 3 * tanLat * tanLat + eta2 - 9 * tanLat * tanLat * eta2);
+    const IX = tanLat / (720 * rho * Math.pow(nu, 5)) * (61 + 90 * tanLat * tanLat + 45 * Math.pow(tanLat, 4));
+    const X = 1 / (cosLat * nu);
+    const XI = 1 / (cosLat * 6 * nu * nu * nu) * (nu / rho + 2 * tanLat * tanLat);
+    const XII = 1 / (cosLat * 120 * Math.pow(nu, 5)) * (5 + 28 * tanLat * tanLat + 24 * Math.pow(tanLat, 4));
+    const XIIA = 1 / (cosLat * 5040 * Math.pow(nu, 7)) * (61 + 662 * tanLat * tanLat + 1320 * Math.pow(tanLat, 4) + 720 * Math.pow(tanLat, 6));
+
+    const latRad = lat - VII * dE * dE + VIII * Math.pow(dE, 4) - IX * Math.pow(dE, 6);
+    const lonRad = lon0 + X * dE - XI * Math.pow(dE, 3) + XII * Math.pow(dE, 5) - XIIA * Math.pow(dE, 7);
+
+    // Helmert transformation OSGB36→WGS84
+    const latD = latRad * 180 / Math.PI;
+    const lonD = lonRad * 180 / Math.PI;
+
+    // Approximate Helmert (good to ~5m)
+    const dLat = -0.1502 - 0.2470 * (latD - 49) - 0.0916 * (lonD + 2);
+    const dLon = -0.0445 + 0.0928 * (latD - 49) - 0.2029 * (lonD + 2);
+    return { lat: latD + dLat / 3600, lng: lonD + dLon / 3600 };
+  }
+
+  function xyToLatLng(easting, northing) {
+    return enToLatLng(parseFloat(easting), parseFloat(northing));
+  }
+
+  // ── Execute import and plot points ────────────────────────────────────────
+  window.executeImport = async function() {
+    const status = document.getElementById("importConvertStatus");
+    status.style.display = "block";
+    status.style.color = "#1a5da0";
+    status.textContent = "⏳ Converting coordinates and plotting points…";
+
+    const locType  = document.getElementById("colLocType").value;
+    const colTaxon = document.getElementById("colTaxon").value;
+    const colCommon= document.getElementById("colCommon").value;
+    const colDate  = document.getElementById("colDate").value;
+    const colLoc1  = document.getElementById("colLoc1").value;
+    const colLoc2  = document.getElementById("colLoc2").value;
+
+    if (!colLoc1) { status.style.color = "#c00"; status.textContent = "✗ Please select a location column."; return; }
+
+    // Clear existing import graphics
+    clearImportGraphics();
+
+    const records = [];
+    let ok = 0, fail = 0;
+
+    for (const row of _importRows) {
+      let latLng = null;
+      try {
+        if (locType === "bng") {
+          latLng = bngToLatLng(row[colLoc1]);
+        } else if (locType === "latlng") {
+          const lat = parseFloat(row[colLoc1]);
+          const lng = parseFloat(row[colLoc2]);
+          if (!isNaN(lat) && !isNaN(lng)) latLng = { lat, lng };
+        } else { // xy
+          latLng = xyToLatLng(row[colLoc1], row[colLoc2]);
+        }
+      } catch(e) {}
+
+      if (!latLng) { fail++; continue; }
+
+      const taxon  = colTaxon  ? (row[colTaxon]  || "") : "";
+      const common = colCommon ? (row[colCommon] || "") : "";
+      const date   = colDate   ? (row[colDate]   || "") : "";
+      const label  = common || taxon || "Record";
+
+      records.push({ lat: latLng.lat, lng: latLng.lng, taxon, common, date, label, row });
+      ok++;
+    }
+
+    if (ok === 0) {
+      status.style.color = "#c00";
+      status.textContent = `✗ No valid coordinates found. ${fail} row(s) failed. Check column mapping and format.`;
+      return;
+    }
+
+    _allImportRecords = records;
+    plotImportRecords(records);
+
+    status.style.color = "#1a3d2b";
+    status.textContent = `✓ ${ok} records plotted${fail ? ` (${fail} failed to convert)` : ""}.`;
+
+    // Show filter panel
+    document.getElementById("importFilters").style.display = "block";
+    document.getElementById("btnImport").classList.add("active");
+    document.getElementById("btnImportLabel").textContent = `✓ ${ok} Records Imported`;
+    updateRecordCount();
+
+    setTimeout(closeImportModal, 1200);
+  };
+
+  function plotImportRecords(records) {
+    clearImportGraphics();
+    records.forEach(rec => {
+      const g = new Graphic({
+        geometry: { type: "point", latitude: rec.lat, longitude: rec.lng, spatialReference: { wkid: 4326 } },
+        symbol: {
+          type: "simple-marker",
+          style: "circle",
+          color: [131, 56, 236, 0.8],
+          size: 7,
+          outline: { color: [255, 255, 255, 0.9], width: 1 },
+        },
+        attributes: { ...rec },
+        popupTemplate: {
+          title: rec.label,
+          content: [
+            { type: "fields", fieldInfos: [
+              { fieldName: "taxon",  label: "Taxon" },
+              { fieldName: "common", label: "Common name" },
+              { fieldName: "date",   label: "Date" },
+            ]},
+          ],
+        },
+      });
+
+      // Label graphic
+      const labelG = new Graphic({
+        geometry: { type: "point", latitude: rec.lat, longitude: rec.lng, spatialReference: { wkid: 4326 } },
+        symbol: {
+          type: "text",
+          color: [60, 20, 100, 1],
+          haloColor: [255, 255, 255, 0.85],
+          haloSize: 1.5,
+          text: rec.label,
+          font: { size: 8, family: "sans-serif" },
+          verticalAlignment: "bottom",
+          yoffset: 6,
+        },
+      });
+
+      view.graphics.add(g);
+      view.graphics.add(labelG);
+      _importGraphics.push(g, labelG);
+    });
+    updateRecordCount();
+  }
+
+  function clearImportGraphics() {
+    _importGraphics.forEach(g => { try { view.graphics.remove(g); } catch(e) {} });
+    _importGraphics = [];
+  }
+
+  // ── Filters ────────────────────────────────────────────────────────────────
+  window.applyRecordFilters = function() {
+    const taxonFilter = document.getElementById("filterTaxon").value.trim().toLowerCase();
+    const dateFrom    = document.getElementById("filterDateFrom").value;
+    const dateTo      = document.getElementById("filterDateTo").value;
+
+    const filtered = _allImportRecords.filter(rec => {
+      if (taxonFilter && !rec.taxon.toLowerCase().includes(taxonFilter) &&
+                         !rec.common.toLowerCase().includes(taxonFilter)) return false;
+      if (dateFrom && rec.date && rec.date < dateFrom) return false;
+      if (dateTo   && rec.date && rec.date > dateTo)   return false;
+      return true;
+    });
+
+    plotImportRecords(filtered);
+    updateRecordCount(filtered.length);
+  };
+
+  function updateRecordCount(count) {
+    const el = document.getElementById("recordCount");
+    if (!el) return;
+    const total = _allImportRecords.length;
+    const shown = count !== undefined ? count : total;
+    el.textContent = `Showing ${shown} of ${total} records`;
+  }
 
   // Map type definitions — built dynamically after analysis runs
   let _mapTypes = [];
@@ -3594,6 +3987,83 @@ require([
 
 }); // end require
 </script>
+<!-- ── Import Records Modal ──────────────────────────────────────────────── -->
+<div id="importModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;">
+  <div style="background:#fff;border-radius:10px;width:700px;max-width:98vw;box-shadow:0 8px 32px rgba(0,0,0,.25);font-family:'Georgia',serif;margin:auto;">
+
+    <!-- Header -->
+    <div style="background:#1a3d2b;color:#fff;padding:14px 20px;border-radius:10px 10px 0 0;display:flex;align-items:center;justify-content:space-between;">
+      <span style="font-size:14px;font-weight:bold;">Import Species Records</span>
+      <button onclick="closeImportModal()" style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+
+    <div style="padding:20px;">
+
+      <!-- Step 1: Paste -->
+      <div style="margin-bottom:16px;">
+        <div style="font-size:11px;font-weight:bold;color:#6b7c6f;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">Step 1 — Paste data from Excel or CSV</div>
+        <textarea id="importPaste" rows="8" placeholder="Paste your data here (tab or comma separated, with or without headers)…"
+          style="width:100%;padding:8px;border:1px solid #c9dece;border-radius:5px;font-family:monospace;font-size:11px;resize:vertical;box-sizing:border-box;"
+          oninput="parseImportData()"></textarea>
+        <div id="importParseStatus" style="font-size:10px;color:#6b7c6f;margin-top:4px;"></div>
+      </div>
+
+      <!-- Step 2: Column mapping -->
+      <div id="importColMapping" style="display:none;margin-bottom:16px;">
+        <div style="font-size:11px;font-weight:bold;color:#6b7c6f;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">Step 2 — Map columns</div>
+        <div style="overflow-x:auto;margin-bottom:10px;">
+          <table id="importPreview" style="border-collapse:collapse;font-size:11px;min-width:100%;"></table>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Taxon / Scientific Name <span style="color:#c00;">*</span></label>
+            <select id="colTaxon" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Common Name <span style="color:#c00;">*</span></label>
+            <select id="colCommon" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Location Format <span style="color:#c00;">*</span></label>
+            <select id="colLocType" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;" onchange="updateLocCols()">
+              <option value="bng">British National Grid (e.g. ST123456)</option>
+              <option value="latlng">Latitude / Longitude</option>
+              <option value="xy">Easting / Northing (BNG metres)</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Date</label>
+            <select id="colDate" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
+          </div>
+          <div id="locCol1Wrap">
+            <label id="locCol1Label" style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Grid Reference column <span style="color:#c00;">*</span></label>
+            <select id="colLoc1" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
+          </div>
+          <div id="locCol2Wrap" style="display:none;">
+            <label id="locCol2Label" style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Second location column <span style="color:#c00;">*</span></label>
+            <select id="colLoc2" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Import -->
+      <div id="importConvertStatus" style="font-size:11px;color:#1a5da0;margin-bottom:10px;display:none;"></div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button onclick="closeImportModal()"
+          style="padding:7px 16px;border:1px solid #c9dece;border-radius:5px;background:#fff;font-family:'Georgia',serif;font-size:12px;cursor:pointer;color:#3a4a3e;">
+          Cancel
+        </button>
+        <button id="importBtn" onclick="executeImport()" disabled
+          style="padding:7px 16px;border:none;border-radius:5px;background:#1a3a6b;color:#fff;font-family:'Georgia',serif;font-size:12px;cursor:pointer;font-weight:bold;">
+          Plot on Map
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <!-- ── Print Map Modal ───────────────────────────────────────────────────── -->
 <div id="printModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:10px;padding:24px;width:400px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.25);font-family:'Georgia',serif;max-height:90vh;overflow-y:auto;">

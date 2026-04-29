@@ -3339,34 +3339,29 @@ require([
 
     let origVisibility = null;
     try {
+      const toArr = layers => typeof layers.toArray === "function" ? layers.toArray() : Array.from(layers);
+
       const setLayerVisibility = (layers, showTypes) => {
-        layers.forEach(layer => {
+        toArr(layers).forEach(layer => {
           if (layer.type === "group" && layer.layers) {
-            // For groups, recurse — group itself visible if any child is shown
             setLayerVisibility(layer.layers, showTypes);
-            const anyVisible = layer.layers.toArray().some(l => l.visible);
-            layer.visible = anyVisible;
+            layer.visible = toArr(layer.layers).some(l => l.visible);
             return;
           }
-          // Match this layer against CONFIG entries
           const cfg = CONFIG.layers.find(c => c.title === layer.title);
           if (cfg) {
-            // Show if its type is in the visible set
             layer.visible = showTypes.includes(cfg.type);
           } else if (CONFIG.redLineTitlePattern?.test(layer.title)) {
-            // Always show the red line boundary
             layer.visible = true;
           } else {
-            // Hide everything else (basemap layers are not in webMap.layers so unaffected)
             layer.visible = false;
           }
         });
       };
 
-      // Save original visibility state so we can restore after screenshot
       const saveVisibility = (layers) => {
         const state = new Map();
-        layers.forEach(layer => {
+        toArr(layers).forEach(layer => {
           state.set(layer.id, layer.visible);
           if (layer.type === "group" && layer.layers) {
             saveVisibility(layer.layers).forEach((v, k) => state.set(k, v));
@@ -3374,8 +3369,9 @@ require([
         });
         return state;
       };
+
       const restoreVisibility = (layers, state) => {
-        layers.forEach(layer => {
+        toArr(layers).forEach(layer => {
           if (state.has(layer.id)) layer.visible = state.get(layer.id);
           if (layer.type === "group" && layer.layers) restoreVisibility(layer.layers, state);
         });

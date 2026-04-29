@@ -3357,13 +3357,13 @@ require([
       flattenLayers(webMap.layers);
 
       const saveVisibility = () => {
-        const state = new Map();
-        flatLayers.forEach(l => { if (l && l.id != null) state.set(l.id, l.visible); });
+        const state = {};
+        flatLayers.forEach(l => { if (l && l.id != null) state[l.id] = l.visible; });
         return state;
       };
       const restoreVisibility = (state) => {
-        if (!(state instanceof Map)) return;
-        flatLayers.forEach(l => { if (l && l.id != null && state.has(l.id)) l.visible = state.get(l.id); });
+        if (!state || typeof state !== "object") return;
+        flatLayers.forEach(l => { if (l && l.id != null && l.id in state) l.visible = state[l.id]; });
       };
       const setLayerVisibility = (showTypes) => {
         flatLayers.forEach(layer => {

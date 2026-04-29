@@ -3356,12 +3356,18 @@ require([
       };
       flattenLayers(webMap.layers);
 
-      // Save / restore / set visibility on the flat list
-      const saveVisibility  = () => new Map(flatLayers.map(l => [l.id, l.visible]));
-      const restoreVisibility = (state) => flatLayers.forEach(l => { if (state.has(l.id)) l.visible = state.get(l.id); });
+      const saveVisibility = () => {
+        const state = new Map();
+        flatLayers.forEach(l => { if (l && l.id != null) state.set(l.id, l.visible); });
+        return state;
+      };
+      const restoreVisibility = (state) => {
+        if (!(state instanceof Map)) return;
+        flatLayers.forEach(l => { if (l && l.id != null && state.has(l.id)) l.visible = state.get(l.id); });
+      };
       const setLayerVisibility = (showTypes) => {
         flatLayers.forEach(layer => {
-          if (layer.type === "group") return; // handle groups after leaves
+          if (!layer || layer.type === "group") return;
           const cfg = CONFIG.layers.find(c => c.title === layer.title);
           if (cfg) {
             layer.visible = showTypes.includes(cfg.type);
@@ -3371,9 +3377,8 @@ require([
             layer.visible = false;
           }
         });
-        // Set each group visible if any of its direct children are visible
-        flatLayers.filter(l => l.type === "group" && l.layers).forEach(group => {
-          group.visible = toArr(group.layers).some(l => l.visible);
+        flatLayers.filter(l => l && l.type === "group" && l.layers).forEach(group => {
+          group.visible = toArr(group.layers).some(l => l && l.visible);
         });
       };
 

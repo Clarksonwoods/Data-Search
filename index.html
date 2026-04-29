@@ -1570,8 +1570,8 @@ require([
 
   function defaultCategory(cfg) {
     if (cfg.type === "records") return "records";
-    if (cfg.type === "bat") return "national";
-    if (cfg.type === "lad") return "national"; // uses centroid anyway, not buffer
+    if (cfg.type === "bat") return "international";
+    if (cfg.type === "lad") return "national";
     if (cfg.type === "river" || cfg.type === "habitat") return "national";
     if (cfg.type === "statutory") {
       const imp = designationImportance(cfg.shortName);
@@ -3180,91 +3180,116 @@ require([
       if (titlesByCat[cat]) titlesByCat[cat].push(cfg.title);
     });
 
-    // One map per category (skip if no buffer distance set)
-    ["international", "national", "local", "records"].forEach(cat => {
-      const km = buffers[cat];
-      if (!km) return;
-
-      // Layers assigned to this category
-      const layerTitles = titlesByCat[cat];
-
-      // Legend — always buffer + RLB, then found layers
-      const col = `rgb(${bufferStyles[cat].outline.join(",")})`;
-      const legend = [
-        { color: col, label: `${km}km buffer (${catLabels[cat]})`, dash: true },
-        { color: "#c1121f", label: "Red Line Boundary" },
-      ];
-      // Add legend entries for found layers in this category
-      const foundInCat = layerTitles
-        .map(t => results[t])
-        .filter(r => r?.status === "found");
-      const typesSeen = new Set();
-      foundInCat.forEach(r => {
-        const type = r.cfg?.type;
-        if (typesSeen.has(type)) return;
-        typesSeen.add(type);
-        if (type === "statutory")  legend.push({ color: "#1a3d2b", label: "Designated Sites" });
-        if (type === "habitat")    legend.push({ color: "#52b788", label: "Priority Habitats" });
-        if (type === "river")      legend.push({ color: "#0077b6", label: "River Habitats" });
-        if (type === "bat")        legend.push({ color: "#6a0572", label: "Bat Consultation Zones" });
-        if (type === "records")    legend.push({ color: "#8338ec", label: "Biodiversity Records" });
-      });
-
-      _mapTypes.push({
-        key: cat,
-        label: `${catLabels[cat]} (${km}km buffer)`,
-        title: `${catLabels[cat]} Designations Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
-        bufKm: km,
-        bufGeom: bufGeoms[cat],
-        bufCat: cat,            // which single buffer ring to show
-        layerTitles,            // exact titles visible on this map
-        legend,
-      });
+    // Helper — filter titles to only those of a given type
+    const ofType = (titles, ...types) => titles.filter(t => {
+      const cfg = CONFIG.layers.find(c => c.title === t);
+      return cfg && types.includes(cfg.type);
     });
 
-    // Habitats-only map
-    const habTitles = CONFIG.layers
-      .filter(cfg => cfg.type === "habitat")
-      .map(cfg => cfg.title);
-    const habFound = habTitles.some(t => results[t]?.status === "found");
-    if (habFound) {
-      const cat = "national";
-      const km = buffers[cat];
-      _mapTypes.push({
-        key: "habitats",
-        label: `Habitats only (${km}km buffer)`,
-        title: `Priority and Designated Habitats Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
-        bufKm: km, bufGeom: bufGeoms[cat], bufCat: cat,
-        layerTitles: habTitles,
-        legend: [
-          { color: `rgb(${bufferStyles[cat].outline.join(",")})`, label: `${km}km buffer`, dash: true },
+    // ── International map: statutory + bat only ───────────────────────────
+    {
+      const cat = "international"; const km = buffers[cat]; if (km) {
+        const layerTitles = ofType(titlesByCat[cat], "statutory", "bat");
+        const col = `rgb(${bufferStyles[cat].outline.join(",")})`;
+        const legend = [
+          { color: col, label: `${km}km buffer (International)`, dash: true },
           { color: "#c1121f", label: "Red Line Boundary" },
-          { color: "#52b788", label: "Ancient Woodland" },
-          { color: "#95d5b2", label: "Priority Habitat Inventory" },
-        ],
-      });
+          { color: "#1a3d2b", label: "International Designated Sites" },
+          { color: "#6a0572", label: "Bat Consultation Zones" },
+        ].filter((_, i) => i < 2 || layerTitles.some(t => {
+          const r = results[t]; return r?.status === "found";
+        }));
+        _mapTypes.push({ key: cat, label: `International (${km}km)`,
+          title: `International Designated Sites Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
+          bufKm: km, bufGeom: bufGeoms[cat], bufCat: cat, layerTitles,
+          legend: [
+            { color: col, label: `${km}km buffer (International)`, dash: true },
+            { color: "#c1121f", label: "Red Line Boundary" },
+            ...(ofType(titlesByCat[cat], "statutory").some(t => results[t]?.status === "found")
+              ? [{ color: "#1a3d2b", label: "International Designated Sites" }] : []),
+            ...(ofType(titlesByCat[cat], "bat").some(t => results[t]?.status === "found")
+              ? [{ color: "#6a0572", label: "Bat Consultation Zones" }] : []),
+          ],
+        });
+      }
     }
 
-    // Records-only map
-    const recTitles = CONFIG.layers
-      .filter(cfg => cfg.type === "records")
-      .map(cfg => cfg.title);
-    const recFound = recTitles.some(t => results[t]?.status === "found");
-    if (recFound) {
-      const cat = "records";
-      const km = buffers[cat];
-      _mapTypes.push({
-        key: "records-only",
-        label: `Biodiversity Records only (${km}km buffer)`,
-        title: `Biodiversity Records Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
-        bufKm: km, bufGeom: bufGeoms[cat], bufCat: cat,
-        layerTitles: recTitles,
-        legend: [
-          { color: `rgb(${bufferStyles[cat].outline.join(",")})`, label: `${km}km buffer`, dash: true },
-          { color: "#c1121f", label: "Red Line Boundary" },
-          { color: "#8338ec", label: "Biodiversity Records" },
-        ],
-      });
+    // ── National map: statutory only (habitats/rivers go on habitats map) ─
+    {
+      const cat = "national"; const km = buffers[cat]; if (km) {
+        const layerTitles = ofType(titlesByCat[cat], "statutory");
+        const col = `rgb(${bufferStyles[cat].outline.join(",")})`;
+        _mapTypes.push({ key: cat, label: `National (${km}km)`,
+          title: `National Designated Sites Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
+          bufKm: km, bufGeom: bufGeoms[cat], bufCat: cat, layerTitles,
+          legend: [
+            { color: col, label: `${km}km buffer (National)`, dash: true },
+            { color: "#c1121f", label: "Red Line Boundary" },
+            ...(layerTitles.some(t => results[t]?.status === "found")
+              ? [{ color: "#1a3d2b", label: "National Designated Sites" }] : []),
+          ],
+        });
+      }
+    }
+
+    // ── Local map: statutory only ─────────────────────────────────────────
+    {
+      const cat = "local"; const km = buffers[cat]; if (km) {
+        const layerTitles = ofType(titlesByCat[cat], "statutory");
+        const col = `rgb(${bufferStyles[cat].outline.join(",")})`;
+        _mapTypes.push({ key: cat, label: `Local (${km}km)`,
+          title: `Local Designated Sites Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
+          bufKm: km, bufGeom: bufGeoms[cat], bufCat: cat, layerTitles,
+          legend: [
+            { color: col, label: `${km}km buffer (Local)`, dash: true },
+            { color: "#c1121f", label: "Red Line Boundary" },
+            ...(layerTitles.some(t => results[t]?.status === "found")
+              ? [{ color: "#1a3d2b", label: "Local Designated Sites" }] : []),
+          ],
+        });
+      }
+    }
+
+    // ── Habitats & Watercourses map (national buffer, habitat+river types) ─
+    {
+      const cat = "national"; const km = buffers[cat]; if (km) {
+        const layerTitles = ofType(titlesByCat[cat], "habitat", "river");
+        if (layerTitles.some(t => results[t]?.status === "found")) {
+          const col = `rgb(${bufferStyles[cat].outline.join(",")})`;
+          _mapTypes.push({ key: "habitats", label: `Habitats & Watercourses (${km}km)`,
+            title: `Habitats and Watercourses Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
+            bufKm: km, bufGeom: bufGeoms[cat], bufCat: cat, layerTitles,
+            legend: [
+              { color: col, label: `${km}km buffer`, dash: true },
+              { color: "#c1121f", label: "Red Line Boundary" },
+              ...(ofType(layerTitles, "habitat").some(t => results[t]?.status === "found")
+                ? [{ color: "#52b788", label: "Ancient Woodland" },
+                   { color: "#95d5b2", label: "Priority Habitats" }] : []),
+              ...(ofType(layerTitles, "river").some(t => results[t]?.status === "found")
+                ? [{ color: "#0077b6", label: "River Habitats" }] : []),
+            ],
+          });
+        }
+      }
+    }
+
+    // ── Biodiversity Records map (single combined map) ────────────────────
+    {
+      const cat = "records"; const km = buffers[cat]; if (km) {
+        const layerTitles = titlesByCat[cat];
+        if (layerTitles.some(t => results[t]?.status === "found")) {
+          const col = `rgb(${bufferStyles[cat].outline.join(",")})`;
+          _mapTypes.push({ key: "records", label: `Biodiversity Records (${km}km)`,
+            title: `Biodiversity Records Within ${km}km` + (ladName ? ` — ${ladName}` : ""),
+            bufKm: km, bufGeom: bufGeoms[cat], bufCat: cat, layerTitles,
+            legend: [
+              { color: col, label: `${km}km buffer`, dash: true },
+              { color: "#c1121f", label: "Red Line Boundary" },
+              { color: "#8338ec", label: "Biodiversity Records" },
+            ],
+          });
+        }
+      }
     }
 
     if (_mapTypes.length === 0) {

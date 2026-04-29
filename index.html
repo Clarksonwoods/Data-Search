@@ -729,7 +729,7 @@
         <span id="btnRunLabel">Run Desk Study</span>
       </button>
 
-      <button class="step-btn btn-import" id="btnImport" onclick="openImportModal()" style="display:none">
+      <button class="step-btn btn-import" id="btnImport" onclick="openImportModal()">
         <span class="step-num">3</span>
         <span id="btnImportLabel">Import Species Records</span>
       </button>
@@ -745,6 +745,20 @@
             <input id="filterDateFrom" type="date" style="flex:1;padding:4px;border:1px solid var(--line);border-radius:4px;font-size:11px;" oninput="applyRecordFilters()"/>
             <span style="font-size:10px;color:var(--ink-faint)">to</span>
             <input id="filterDateTo" type="date" style="flex:1;padding:4px;border:1px solid var(--line);border-radius:4px;font-size:11px;" oninput="applyRecordFilters()"/>
+          </div>
+          <!-- Protection status filters -->
+          <div style="display:flex;flex-direction:column;gap:3px;padding:5px 7px;background:var(--bg);border:1px solid var(--line);border-radius:4px;">
+            <div style="font-size:10px;font-weight:bold;color:var(--ink-faint);margin-bottom:2px;text-transform:uppercase;letter-spacing:.06em;">Conservation status</div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-mid);cursor:pointer;">
+              <input id="filterLegal" type="checkbox" onchange="applyRecordFilters()" style="accent-color:#d22828;width:13px;height:13px;"/>
+              <span style="display:inline-block;width:10px;height:10px;border:2px solid #d22828;transform:rotate(45deg);flex-shrink:0;"></span>
+              Legally protected
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-mid);cursor:pointer;">
+              <input id="filterPriority" type="checkbox" onchange="applyRecordFilters()" style="accent-color:#c87800;width:13px;height:13px;"/>
+              <span style="display:inline-block;width:10px;height:10px;border:2px solid #c87800;transform:rotate(45deg);flex-shrink:0;"></span>
+              Priority / Red-listed
+            </label>
           </div>
           <div style="font-size:10px;color:var(--ink-faint);text-align:right;" id="recordCount"></div>
         </div>
@@ -1532,6 +1546,12 @@ require([
   // ── Draw layer + SketchViewModel ─────────────────────────────────────────
   const drawLayer = new GraphicsLayer({ listMode: "hide" });
   view.map.add(drawLayer);
+
+  // ── Import species layers (named so they appear in the layer panel) ────────
+  const importLayer          = new GraphicsLayer({ title: "Imported Species Records",    listMode: "show", visible: true });
+  const importProtectedLayer = new GraphicsLayer({ title: "Protected / Priority Species", listMode: "show", visible: true });
+  view.map.add(importLayer);
+  view.map.add(importProtectedLayer);
   let sketchVM = null;
 
   function getSketchVM() {
@@ -2172,6 +2192,7 @@ require([
     window._lastResults  = results;
     window._lastBuffers  = buffers;
     window._lastBufGeoms = bufGeoms;
+    window._lastRlbGeom  = selectedGeom;
     window._lastSiteName = document.getElementById("btnSelectLabel").textContent.replace("✓ ", "") || "";
 
     // Await JNCC in parallel — by now it will usually already be done
@@ -2183,8 +2204,7 @@ require([
     renderReport(report);
     setStatus("info", `✓ Screening complete — ${CONFIG.layers.filter(l => results[l.title]?.status === "found").length} layer(s) with intersecting features.`);
     resetRunButton();
-    document.getElementById("btnReset").style.display = "block";
-    showImportButton();
+
   };
 
   // ── Layer results list ────────────────────────────────────────────────────
@@ -2623,6 +2643,88 @@ require([
           const uniqueNames = [...new Set(r.features.map(f => f.attributes[r.cfg.nameField]).filter(Boolean))];
           if (uniqueNames.length) html += `<ul>` + uniqueNames.map(n => `<li>${n}</li>`).join("") + `</ul>`;
         });
+      }
+    }
+
+    // ══ LOCAL RECORDS CENTRE DATA ═══════════════════════════════════════════
+    if (_allImportRecords && _allImportRecords.length > 0) {
+      // Derive LRC section title from LAD name
+      const lrcTitle = ladNames.length > 0
+        ? `${ladNames[0]} Local Records Centre`
+        : "Local Records Centre";
+
+      html += `<h2>${lrcTitle}</h2>`;
+
+      // Build unique species list from imported records (scientific + common)
+      const lrcSpecies = [];
+      const lrcSeenSci = new Set();
+      _allImportRecords.forEach(rec => {
+        const sci = rec.scientific || "";
+        const com = rec.common || "";
+        const key = (sci || com).toLowerCase();
+        if (!key || lrcSeenSci.has(key)) return;
+        lrcSeenSci.add(key);
+        lrcSpecies.push({ scientific: sci, common: com });
+      });
+
+      const total = _allImportRecords.length;
+      const uniqueCount = lrcSpecies.length;
+
+      html += P(`A total of ${total} record${total !== 1 ? "s" : ""} comprising ${uniqueCount} species were obtained from the ${lrcTitle} and plotted on the map. These records are summarised below in relation to their conservation status.`);
+
+      // Cross-reference against JNCC — try scientific name first, then common name
+      if (jnccLookup && Object.keys(jnccLookup).length > 0) {
+        const lrcByCategory = {};
+        lrcSpecies.forEach(({ scientific, common }) => {
+          const match = (scientific && lookupSpecies(scientific)) || (common && lookupSpecies(common));
+          if (!match) return;
+          const cat = (match.taxonGroup || "Other").replace(/\s*\(.*?\)\s*/g, "").trim() || "Other";
+          if (!lrcByCategory[cat]) lrcByCategory[cat] = [];
+          const displayName = scientific && common
+            ? `${common} <em>(${scientific})</em>`
+            : scientific
+              ? `<em>${scientific}</em>`
+              : common;
+          lrcByCategory[cat].push({ displayName, designations: match.designations });
+        });
+
+        const lrcProtectedCount = Object.values(lrcByCategory).reduce((s, v) => s + v.length, 0);
+
+        if (lrcProtectedCount > 0) {
+          html += P(`Of the ${uniqueCount} species recorded, ${lrcProtectedCount} ${lrcProtectedCount !== 1 ? "are" : "is"} listed under UK or international conservation legislation or Red Lists. These are summarised below by taxonomic group.`);
+          Object.entries(lrcByCategory).sort((a, b) => a[0].localeCompare(b[0])).forEach(([cat, spp]) => {
+            html += `<p><strong>${cat.charAt(0).toUpperCase() + cat.slice(1)}</strong></p>`;
+            html += `<ul>` + spp.map(s =>
+              `<li>${s.displayName} — ${s.designations.join("; ")}</li>`
+            ).join("") + `</ul>`;
+          });
+        } else {
+          html += P(`None of the ${uniqueCount} species recorded from the ${lrcTitle} were identified on the JNCC Conservation Designations list under the selected legislation. This does not preclude the presence of protected species within the wider site area.`);
+        }
+        html += `<p style="font-size:10px;color:#666;font-style:italic">Species protection data: JNCC Conservation Designations for UK Taxa (December 2023), OGL v3.</p>`;
+
+        // Full species list table
+        html += `<p><strong>Full species list</strong></p>`;
+        html += `<table><thead><tr><th>Common Name</th><th>Scientific Name</th><th>Records</th></tr></thead><tbody>`;
+        lrcSpecies.forEach(({ scientific, common }) => {
+          const count = _allImportRecords.filter(r =>
+            (r.scientific || "").toLowerCase() === scientific.toLowerCase() ||
+            (r.common || "").toLowerCase() === common.toLowerCase()
+          ).length;
+          html += `<tr><td>${common || "—"}</td><td><em>${scientific || "—"}</em></td><td>${count}</td></tr>`;
+        });
+        html += `</tbody></table>`;
+
+      } else if (jnccLookup === null) {
+        html += P(`${ph("JNCC species protection data is still loading — re-run the desk study to include protected species cross-referencing for these records.")}`);
+      } else {
+        html += P(`Protected species cross-referencing was unavailable. All ${lrcTitle} species are listed below for manual review.`);
+        html += `<ul>` + lrcSpecies.map(({ scientific, common }) => {
+          const displayName = scientific && common
+            ? `${common} <em>(${scientific})</em>`
+            : `<em>${scientific || common}</em>`;
+          return `<li>${displayName}</li>`;
+        }).join("") + `</ul>`;
       }
     }
 
@@ -3142,14 +3244,23 @@ require([
       }
       document.getElementById("btnSelect").classList.remove("selecting", "selected");
       document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
-      document.getElementById("btnImport").style.display = "none";
       document.getElementById("btnImport").classList.remove("active");
       document.getElementById("btnImportLabel").textContent = "Import Species Records";
       document.getElementById("importFilters").style.display = "none";
+      const filterLegal = document.getElementById("filterLegal");
+      const filterPriority = document.getElementById("filterPriority");
+      if (filterLegal)    filterLegal.checked = false;
+      if (filterPriority) filterPriority.checked = false;
       document.getElementById("btnDrawLabel").textContent = "Draw red line boundary";
       document.getElementById("btnRun").disabled = true;
       document.getElementById("btnRunLabel").textContent = "Run Desk Study";
       document.getElementById("layerResults").style.display = "none";
+      const existingImportBox = document.getElementById("importLayerResultBox");
+      if (existingImportBox) existingImportBox.remove();
+      _taxonColourMap = {};
+      window._lastResults = null;
+      window._lastBuffers = null;
+      window._lastRlbGeom = null;
       document.getElementById("reportBox").classList.remove("visible");
       document.getElementById("btnReset").style.display = "none";
       hideProgress();
@@ -3187,13 +3298,10 @@ require([
 
   let _importRows   = [];    // parsed data rows (objects)
   let _importCols   = [];    // column names/indices
-  let _importGraphics = [];  // Graphic objects on map
+  let _importColumnNames = []; // all column names from last import
+  let _importGraphics          = [];  // Graphic objects in importLayer
+  let _importProtectedGraphics = [];  // Graphic objects in importProtectedLayer
   let _allImportRecords = []; // unfiltered plotted records for filtering
-
-  // Show Step 3 button after analysis runs
-  function showImportButton() {
-    document.getElementById("btnImport").style.display = "flex";
-  }
 
   window.openImportModal = function() {
     document.getElementById("importModal").style.display = "flex";
@@ -3273,15 +3381,15 @@ require([
     // Populate column selects
     const colOpts = `<option value="">— not used —</option>` +
       headers.map((h, i) => `<option value="${h}">${h}</option>`).join("");
-    ["colTaxon","colCommon","colDate","colLoc1","colLoc2"].forEach(id => {
+    ["colScientific","colCommon","colDate","colLoc1","colLoc2"].forEach(id => {
       document.getElementById(id).innerHTML = colOpts;
     });
 
     // Auto-detect common columns
     const autoMatch = (patterns) => headers.find(h => patterns.some(p => p.test(h))) || "";
     const set = (id, val) => { if (val) document.getElementById(id).value = val; };
-    set("colTaxon",  autoMatch([/taxon|scientific|latin|species/i]));
-    set("colCommon", autoMatch([/common|name/i]));
+    set("colScientific", autoMatch([/scientific|latin|taxon.?name|species.?name|recommended.?taxon/i]));
+    set("colCommon",     autoMatch([/common.?name|common\b|english.?name/i]));
     set("colDate",   autoMatch([/date/i]));
     set("colLoc1",   autoMatch([/grid.?ref|ngr|bng|gr\b/i]));
     // Check if lat/lng detected
@@ -3405,14 +3513,15 @@ require([
     status.style.color = "#1a5da0";
     status.textContent = "⏳ Converting coordinates and plotting points…";
 
-    const locType  = document.getElementById("colLocType").value;
-    const colTaxon = document.getElementById("colTaxon").value;
-    const colCommon= document.getElementById("colCommon").value;
-    const colDate  = document.getElementById("colDate").value;
-    const colLoc1  = document.getElementById("colLoc1").value;
-    const colLoc2  = document.getElementById("colLoc2").value;
+    const locType    = document.getElementById("colLocType").value;
+    const colSci     = document.getElementById("colScientific").value;
+    const colCommon  = document.getElementById("colCommon").value;
+    const colDate    = document.getElementById("colDate").value;
+    const colLoc1    = document.getElementById("colLoc1").value;
+    const colLoc2    = document.getElementById("colLoc2").value;
 
     if (!colLoc1) { status.style.color = "#c00"; status.textContent = "✗ Please select a location column."; return; }
+    if (!colSci && !colCommon) { status.style.color = "#c00"; status.textContent = "✗ Please map at least a Scientific Name or Common Name column."; return; }
 
     // Clear existing import graphics
     clearImportGraphics();
@@ -3436,12 +3545,15 @@ require([
 
       if (!latLng) { fail++; continue; }
 
-      const taxon  = colTaxon  ? (row[colTaxon]  || "") : "";
-      const common = colCommon ? (row[colCommon] || "") : "";
-      const date   = colDate   ? (row[colDate]   || "") : "";
-      const label  = common || taxon || "Record";
+      const scientific = colSci    ? (row[colSci]    || "").trim() : "";
+      const common     = colCommon ? (row[colCommon] || "").trim() : "";
+      const date       = colDate   ? (row[colDate]   || "").trim() : "";
+      const label      = common || scientific || "Record";
+      // Extra columns: everything except the mapped ones
+      const mappedCols = new Set([colSci, colCommon, colDate, colLoc1, colLoc2].filter(Boolean));
+      const extraCols  = _importCols.filter(c => !mappedCols.has(c));
 
-      records.push({ lat: latLng.lat, lng: latLng.lng, taxon, common, date, label, row });
+      records.push({ lat: latLng.lat, lng: latLng.lng, scientific, common, date, label, row, _allCols: extraCols });
       ok++;
     }
 
@@ -3451,8 +3563,18 @@ require([
       return;
     }
 
+    // Annotate each record with its JNCC protection status (if lookup is ready)
+    annotateProtectionStatus(records);
+
     _allImportRecords = records;
+    _importColumnNames = _importCols.slice(); // remember all column names
+
+    // Build taxon colour palette
+    buildTaxonColours(records);
+
     plotImportRecords(records);
+    zoomToImportRecords(records);
+    buildLayerPanel(); // refresh layer panel so new named layers appear
 
     status.style.color = "#1a3d2b";
     status.textContent = `✓ ${ok} records plotted${fail ? ` (${fail} failed to convert)` : ""}.`;
@@ -3463,72 +3585,267 @@ require([
     document.getElementById("btnImportLabel").textContent = `✓ ${ok} Records Imported`;
     updateRecordCount();
 
+    renderImportLayerResult();
+
+    // If a desk study report is already rendered, rebuild it so the LRC section appears
+    if (document.getElementById("reportBox").classList.contains("visible") &&
+        window._lastResults) {
+      const updatedReport = await buildReport(
+        window._lastResults,
+        window._lastBuffers || {},
+        window._lastRlbGeom || selectedGeom
+      );
+      renderReport(updatedReport);
+    }
+
     setTimeout(closeImportModal, 1200);
   };
 
+  // ── Taxon colour palette ───────────────────────────────────────────────────
+  // Distinct colours that work well on maps (bold but not garish)
+  const TAXON_PALETTE = [
+    [82,  130, 214],  // blue
+    [220, 80,  60 ],  // red-orange
+    [60,  168, 110],  // green
+    [200, 130, 30 ],  // amber
+    [150, 60,  180],  // purple
+    [0,   180, 200],  // teal
+    [220, 60,  140],  // pink
+    [90,  60,  30 ],  // brown
+    [40,  120, 160],  // steel blue
+    [120, 180, 50 ],  // lime
+  ];
+  let _taxonColourMap = {};  // taxon -> [r,g,b]
+
+  function buildTaxonColours(records) {
+    _taxonColourMap = {};
+    const taxa = [...new Set(records.map(r => r.scientific || r.common || r.label || "Unknown"))];
+    taxa.forEach((t, i) => {
+      _taxonColourMap[t] = TAXON_PALETTE[i % TAXON_PALETTE.length];
+    });
+  }
+
+  function taxonColour(rec) {
+    const key = rec.scientific || rec.common || rec.label || "Unknown";
+    return _taxonColourMap[key] || TAXON_PALETTE[0];
+  }
+
+  // ── Protection status annotation ─────────────────────────────────────────
+  const LEGAL_DESIG_PATTERNS    = [/wca\s*1981/i, /hab\.?\s*reg/i, /badger/i, /conservation of habitats/i, /wildlife.*countryside/i];
+  const PRIORITY_DESIG_PATTERNS = [/nerc\s*s\.?4[12]/i, /bocc5/i, /red list/i, /priority/i];
+
+  function annotateProtectionStatus(records) {
+    if (!jnccLookup) return;
+    records.forEach(rec => {
+      const match = (rec.scientific && lookupSpecies(rec.scientific)) ||
+                    (rec.common     && lookupSpecies(rec.common));
+      rec._jnccMatch          = match || null;
+      rec._isLegallyProtected = match ? match.designations.some(d => LEGAL_DESIG_PATTERNS.some(p => p.test(d)))    : false;
+      rec._isPriority         = match ? match.designations.some(d => PRIORITY_DESIG_PATTERNS.some(p => p.test(d))) : false;
+    });
+  }
+
   function plotImportRecords(records) {
     clearImportGraphics();
+
     records.forEach(rec => {
+      const col         = taxonColour(rec);
+      const isProtected = rec._isLegallyProtected || false;
+      const isPriority  = rec._isPriority  || false;
+      const hasStatus   = isProtected || isPriority;
+
+      const fieldInfos = [
+        { fieldName: "scientific", label: "Scientific name" },
+        { fieldName: "common",     label: "Common name" },
+        { fieldName: "date",       label: "Date" },
+        { fieldName: "_status",    label: "Conservation status" },
+      ];
+      (rec._allCols || []).forEach(k => fieldInfos.push({ fieldName: `_col_${k}`, label: k }));
+
+      const statusStr = rec._jnccMatch ? rec._jnccMatch.designations.join("; ") : "No designated status";
+      const attrs = { scientific: rec.scientific, common: rec.common, date: rec.date, label: rec.label, _status: statusStr };
+      (rec._allCols || []).forEach(k => { attrs[`_col_${k}`] = rec.row[k]; });
+
+      const popupTemplate = { title: "{label}", content: [{ type: "fields", fieldInfos }] };
+
+      // Main circle marker
       const g = new Graphic({
         geometry: { type: "point", latitude: rec.lat, longitude: rec.lng, spatialReference: { wkid: 4326 } },
-        symbol: {
-          type: "simple-marker",
-          style: "circle",
-          color: [131, 56, 236, 0.8],
-          size: 7,
-          outline: { color: [255, 255, 255, 0.9], width: 1 },
-        },
-        attributes: { ...rec },
-        popupTemplate: {
-          title: rec.label,
-          content: [
-            { type: "fields", fieldInfos: [
-              { fieldName: "taxon",  label: "Taxon" },
-              { fieldName: "common", label: "Common name" },
-              { fieldName: "date",   label: "Date" },
-            ]},
-          ],
-        },
+        symbol: { type: "simple-marker", style: "circle", color: [...col, 0.85], size: 8,
+                  outline: { color: [255, 255, 255, 0.9], width: 1.2 } },
+        attributes: attrs, popupTemplate,
       });
 
-      // Label graphic
+      // Label
       const labelG = new Graphic({
         geometry: { type: "point", latitude: rec.lat, longitude: rec.lng, spatialReference: { wkid: 4326 } },
         symbol: {
-          type: "text",
-          color: [60, 20, 100, 1],
-          haloColor: [255, 255, 255, 0.85],
-          haloSize: 1.5,
-          text: rec.label,
-          font: { size: 8, family: "sans-serif" },
-          verticalAlignment: "bottom",
-          yoffset: 6,
+          type: "text", color: [col[0]*0.5, col[1]*0.5, col[2]*0.5, 1],
+          haloColor: [255, 255, 255, 0.9], haloSize: 1.5,
+          text: rec.label, font: { size: 8, family: "sans-serif" },
+          verticalAlignment: "bottom", yoffset: 7,
         },
       });
 
-      view.graphics.add(g);
-      view.graphics.add(labelG);
+      importLayer.add(g);
+      importLayer.add(labelG);
       _importGraphics.push(g, labelG);
+
+      // Protected / priority diamond overlay
+      if (hasStatus) {
+        const outlineCol = isProtected ? [210, 40, 40, 1] : [200, 120, 0, 1]; // red = legal, amber = priority
+        const protG = new Graphic({
+          geometry: { type: "point", latitude: rec.lat, longitude: rec.lng, spatialReference: { wkid: 4326 } },
+          symbol: { type: "simple-marker", style: "diamond", color: [0, 0, 0, 0], size: 15,
+                    outline: { color: outlineCol, width: 2 } },
+          attributes: attrs, popupTemplate,
+        });
+        importProtectedLayer.add(protG);
+        _importProtectedGraphics.push(protG);
+      }
     });
     updateRecordCount();
   }
+  function zoomToImportRecords(records) {
+    if (!records.length) return;
+    let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+    records.forEach(r => {
+      if (r.lat < minLat) minLat = r.lat;
+      if (r.lat > maxLat) maxLat = r.lat;
+      if (r.lng < minLng) minLng = r.lng;
+      if (r.lng > maxLng) maxLng = r.lng;
+    });
+    const pad = 0.01; // ~1km padding
+    view.goTo({
+      target: {
+        type: "extent",
+        xmin: minLng - pad, ymin: minLat - pad,
+        xmax: maxLng + pad, ymax: maxLat + pad,
+        spatialReference: { wkid: 4326 },
+      }
+    }, { animate: true, duration: 800 });
+  }
+
+  // ── Import layer results box ───────────────────────────────────────────────
+  function renderImportLayerResult() {
+    const layerResults = document.getElementById("layerResults");
+    const list = document.getElementById("layerList");
+
+    // Remove any existing import result box
+    const existing = document.getElementById("importLayerResultBox");
+    if (existing) existing.remove();
+
+    layerResults.style.display = "block";
+
+    const total = _allImportRecords.length;
+    const taxa = Object.keys(_taxonColourMap);
+
+    const box = document.createElement("div");
+    box.id = "importLayerResultBox";
+    box.style.cssText = `
+      margin-bottom: 10px;
+      border: 1px solid #b8d4f0;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #f0f7ff;
+    `;
+
+    // Header row
+    const hdr = document.createElement("div");
+    hdr.style.cssText = `
+      display:flex; align-items:center; gap:8px; padding:6px 10px;
+      background: #1a3a6b; color:#fff; cursor:pointer; user-select:none;
+    `;
+    hdr.innerHTML = `
+      <span style="font-size:11px;font-weight:bold;flex:1;">📍 Imported Species Records</span>
+      <span style="font-size:11px;background:rgba(255,255,255,.2);padding:1px 8px;border-radius:10px;">${total}</span>
+      <span id="importResultChevron" style="font-size:9px;transition:transform .15s;">▶</span>
+    `;
+
+    const body = document.createElement("div");
+    body.id = "importResultBody";
+    body.style.cssText = "display:none; padding:8px 10px;";
+
+    hdr.onclick = () => {
+      const open = body.style.display !== "none";
+      body.style.display = open ? "none" : "block";
+      document.getElementById("importResultChevron").style.transform = open ? "" : "rotate(90deg)";
+    };
+
+    // Taxon legend rows with protection badges
+    taxa.forEach(taxon => {
+      const recs        = _allImportRecords.filter(r => (r.scientific || r.common || r.label || "Unknown") === taxon);
+      const col         = _taxonColourMap[taxon];
+      const hasLegal    = recs.some(r => r._isLegallyProtected);
+      const hasPriority = recs.some(r => r._isPriority);
+
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:7px;padding:3px 0;font-size:11px;color:#1a3d2b;";
+
+      // Circle swatch
+      const swatch = `<span style="width:12px;height:12px;border-radius:50%;background:rgb(${col[0]},${col[1]},${col[2]});border:1.5px solid rgba(0,0,0,.2);flex-shrink:0;display:inline-block;"></span>`;
+
+      // Protection indicators
+      let badges = "";
+      if (hasLegal)    badges += `<span title="Legally protected" style="display:inline-block;width:9px;height:9px;border:2px solid #d22828;transform:rotate(45deg);flex-shrink:0;"></span>`;
+      if (hasPriority) badges += `<span title="Priority / Red-listed" style="display:inline-block;width:9px;height:9px;border:2px solid #c87800;transform:rotate(45deg);flex-shrink:0;"></span>`;
+
+      row.innerHTML = `
+        ${swatch}
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${taxon}">${taxon || "Unknown"}</span>
+        ${badges}
+        <span style="font-weight:bold;color:#1a3a6b;margin-left:2px;">${recs.length}</span>
+      `;
+      body.appendChild(row);
+    });
+
+    // Legend key for diamond markers
+    const protectedTotal = _allImportRecords.filter(r => r._isLegallyProtected || r._isPriority).length;
+    if (protectedTotal > 0) {
+      const legendDiv = document.createElement("div");
+      legendDiv.style.cssText = "margin-top:7px;padding-top:6px;border-top:1px solid #c9dece;display:flex;flex-direction:column;gap:3px;";
+      const legalCount    = _allImportRecords.filter(r => r._isLegallyProtected).length;
+      const priorityCount = _allImportRecords.filter(r => r._isPriority && !r._isLegallyProtected).length;
+      if (legalCount)    legendDiv.innerHTML += `<div style="display:flex;align-items:center;gap:6px;font-size:10px;color:#6b7c6f;"><span style="display:inline-block;width:10px;height:10px;border:2px solid #d22828;transform:rotate(45deg);flex-shrink:0;"></span>Legally protected (${legalCount})</div>`;
+      if (priorityCount) legendDiv.innerHTML += `<div style="display:flex;align-items:center;gap:6px;font-size:10px;color:#6b7c6f;"><span style="display:inline-block;width:10px;height:10px;border:2px solid #c87800;transform:rotate(45deg);flex-shrink:0;"></span>Priority / Red-listed (${priorityCount})</div>`;
+      body.appendChild(legendDiv);
+    }
+
+    // Summary line
+    const summary = document.createElement("div");
+    summary.style.cssText = "margin-top:6px;padding-top:6px;border-top:1px solid #c9dece;font-size:10px;color:#6b7c6f;";
+    summary.textContent = `${taxa.length} taxon${taxa.length !== 1 ? "a" : ""} · ${total} records`;
+    body.appendChild(summary);
+
+    box.appendChild(hdr);
+    box.appendChild(body);
+
+    // Insert at top of list
+    list.insertBefore(box, list.firstChild);
+  }
 
   function clearImportGraphics() {
-    _importGraphics.forEach(g => { try { view.graphics.remove(g); } catch(e) {} });
+    importLayer.removeAll();
+    importProtectedLayer.removeAll();
     _importGraphics = [];
+    _importProtectedGraphics = [];
   }
 
   // ── Filters ────────────────────────────────────────────────────────────────
   window.applyRecordFilters = function() {
-    const taxonFilter = document.getElementById("filterTaxon").value.trim().toLowerCase();
-    const dateFrom    = document.getElementById("filterDateFrom").value;
-    const dateTo      = document.getElementById("filterDateTo").value;
+    const taxonFilter    = document.getElementById("filterTaxon").value.trim().toLowerCase();
+    const dateFrom       = document.getElementById("filterDateFrom").value;
+    const dateTo         = document.getElementById("filterDateTo").value;
+    const filterLegal    = document.getElementById("filterLegal")?.checked;
+    const filterPriority = document.getElementById("filterPriority")?.checked;
 
     const filtered = _allImportRecords.filter(rec => {
-      if (taxonFilter && !rec.taxon.toLowerCase().includes(taxonFilter) &&
+      if (taxonFilter && !rec.scientific.toLowerCase().includes(taxonFilter) &&
                          !rec.common.toLowerCase().includes(taxonFilter)) return false;
       if (dateFrom && rec.date && rec.date < dateFrom) return false;
       if (dateTo   && rec.date && rec.date > dateTo)   return false;
+      if (filterLegal    && !rec._isLegallyProtected) return false;
+      if (filterPriority && !rec._isPriority)         return false;
       return true;
     });
 
@@ -4016,11 +4333,11 @@ require([
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           <div>
-            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Taxon / Scientific Name <span style="color:#c00;">*</span></label>
-            <select id="colTaxon" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
+            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Scientific / Latin Name <span style="color:#c00;">*</span></label>
+            <select id="colScientific" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
           </div>
           <div>
-            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Common Name <span style="color:#c00;">*</span></label>
+            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Common Name</label>
             <select id="colCommon" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
           </div>
           <div>

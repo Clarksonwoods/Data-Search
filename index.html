@@ -3332,7 +3332,7 @@ require([
     const l2 = gridRef.charCodeAt(1) - 65;
     // Adjust for I
     const adj = c => c >= 8 ? c - 1 : c;
-    const e500 = (adj(l1) % 5) * 5 + adj(l2) % 5;
+    const e500 = (adj(l1) % 5) * 5 + adj(l2) % 5 - 10;
     const n500 = 19 - Math.floor(adj(l1) / 5) * 5 - Math.floor(adj(l2) / 5);
 
     const digits = gridRef.slice(2);

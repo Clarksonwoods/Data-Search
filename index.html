@@ -3339,7 +3339,12 @@ require([
 
     let origVisibility = null;
     try {
-      const toArr = layers => typeof layers.toArray === "function" ? layers.toArray() : Array.from(layers);
+      const toArr = l => {
+        if (!l) return [];
+        if (typeof l.toArray === "function") return l.toArray();
+        if (Array.isArray(l)) return l;
+        try { return Array.from(l); } catch(e) { return []; }
+      };
 
       const setLayerVisibility = (layers, showTypes) => {
         toArr(layers).forEach(layer => {
@@ -3364,7 +3369,8 @@ require([
         toArr(layers).forEach(layer => {
           state.set(layer.id, layer.visible);
           if (layer.type === "group" && layer.layers) {
-            saveVisibility(layer.layers).forEach((v, k) => state.set(k, v));
+            const childState = saveVisibility(layer.layers);
+            childState.forEach((v, k) => state.set(k, v));
           }
         });
         return state;

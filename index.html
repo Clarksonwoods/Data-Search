@@ -3269,7 +3269,19 @@ require([
       });
     }
 
-    // If nothing found yet, show a single generic option
+      // Which layer cfg.types should be visible on each map type
+      const typeVisibility = {
+        international: ["statutory"],
+        national:      ["statutory", "habitat", "river", "bat"],
+        local:         ["statutory"],
+        records:       ["records"],
+        habitats:      ["habitat"],
+        all:           ["statutory", "habitat", "river", "bat", "records"],
+      };
+
+      _mapTypes.forEach((mt, i) => {
+        mt.visibleTypes = typeVisibility[mt.key] || ["statutory"];
+      });
     if (_mapTypes.length === 0) {
       _mapTypes.push({
         key: "all",
@@ -3325,16 +3337,66 @@ require([
     const project = document.getElementById("pmProject").value || "";
     const format  = document.getElementById("pmFormat").value;
 
+    let origVisibility = null;
     try {
-      // ── Zoom to the relevant buffer extent first ─────────────────────────
+      const setLayerVisibility = (layers, showTypes) => {
+        layers.forEach(layer => {
+          if (layer.type === "group" && layer.layers) {
+            // For groups, recurse — group itself visible if any child is shown
+            setLayerVisibility(layer.layers, showTypes);
+            const anyVisible = layer.layers.toArray().some(l => l.visible);
+            layer.visible = anyVisible;
+            return;
+          }
+          // Match this layer against CONFIG entries
+          const cfg = CONFIG.layers.find(c => c.title === layer.title);
+          if (cfg) {
+            // Show if its type is in the visible set
+            layer.visible = showTypes.includes(cfg.type);
+          } else if (CONFIG.redLineTitlePattern?.test(layer.title)) {
+            // Always show the red line boundary
+            layer.visible = true;
+          } else {
+            // Hide everything else (basemap layers are not in webMap.layers so unaffected)
+            layer.visible = false;
+          }
+        });
+      };
+
+      // Save original visibility state so we can restore after screenshot
+      const saveVisibility = (layers) => {
+        const state = new Map();
+        layers.forEach(layer => {
+          state.set(layer.id, layer.visible);
+          if (layer.type === "group" && layer.layers) {
+            saveVisibility(layer.layers).forEach((v, k) => state.set(k, v));
+          }
+        });
+        return state;
+      };
+      const restoreVisibility = (layers, state) => {
+        layers.forEach(layer => {
+          if (state.has(layer.id)) layer.visible = state.get(layer.id);
+          if (layer.type === "group" && layer.layers) restoreVisibility(layer.layers, state);
+        });
+      };
+
+      // ── Save, set visibility ──────────────────────────────────────────────
+      origVisibility = saveVisibility(webMap.layers);
+      setLayerVisibility(webMap.layers, mt.visibleTypes || ["statutory"]);
+
+      // ── Zoom tightly to buffer ────────────────────────────────────────────
       if (mt.bufGeom) {
-        await view.goTo({ target: mt.bufGeom, padding: { top: 40, bottom: 40, left: 40, right: 40 } });
-        // Wait for map to settle and re-render
-        await new Promise(r => setTimeout(r, 1200));
+        await view.goTo({ target: mt.bufGeom, padding: { top: 20, bottom: 20, left: 20, right: 20 } });
+        // Wait for tiles to render at new extent
+        await new Promise(r => setTimeout(r, 2000));
       }
 
       status.textContent = "⏳ Capturing map…";
       const screenshot = await view.takeScreenshot({ format: "png", quality: 95 });
+
+      // ── Restore visibility immediately after screenshot ───────────────────
+      restoreVisibility(webMap.layers, origVisibility);
 
       status.textContent = "⏳ Composing image…";
 
@@ -3489,6 +3551,7 @@ require([
 
     } catch(e) {
       console.error("Map export failed:", e);
+      if (origVisibility) try { restoreVisibility(webMap.layers, origVisibility); } catch(_) {}
       status.style.color = "#c00";
       status.textContent = `✗ Export failed: ${e.message || e}`;
       btn.disabled = false;

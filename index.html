@@ -842,6 +842,7 @@ require([
   "esri/views/MapView",
   "esri/WebMap",
   "esri/geometry/geometryEngineAsync",
+  "esri/geometry/Extent",
   "esri/Graphic",
   "esri/rest/query",
   "esri/rest/support/Query",
@@ -852,6 +853,7 @@ require([
 ], function(
   Map, MapView, WebMap,
   geometryEngineAsync,
+  Extent,
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager,
   GraphicsLayer, SketchViewModel
@@ -2210,6 +2212,10 @@ require([
   // ── Layer results list ────────────────────────────────────────────────────
   function renderLayerList(results) {
     const list = document.getElementById("layerList");
+
+    // Preserve the import records box if it exists — it must survive the wipe
+    const importBox = document.getElementById("importLayerResultBox");
+    if (importBox) importBox.remove(); // detach before wipe so we can re-insert
     list.innerHTML = "";
 
     CONFIG.layers.forEach(cfg => {
@@ -2245,6 +2251,9 @@ require([
 
       list.appendChild(item);
     });
+
+    // Re-insert import box at the top if it existed
+    if (importBox) list.insertBefore(importBox, list.firstChild);
 
     document.getElementById("layerResults").style.display = "block";
   }
@@ -3312,6 +3321,8 @@ require([
     document.getElementById("importBtn").disabled = true;
     document.getElementById("importPreview").innerHTML = "";
     _importRows = []; _importCols = [];
+    const tgEl = document.getElementById("colTaxonGroup");
+    if (tgEl) tgEl.innerHTML = "";
   };
 
   window.closeImportModal = function() {
@@ -3381,15 +3392,16 @@ require([
     // Populate column selects
     const colOpts = `<option value="">— not used —</option>` +
       headers.map((h, i) => `<option value="${h}">${h}</option>`).join("");
-    ["colScientific","colCommon","colDate","colLoc1","colLoc2"].forEach(id => {
+    ["colScientific","colCommon","colTaxonGroup","colDate","colLoc1","colLoc2"].forEach(id => {
       document.getElementById(id).innerHTML = colOpts;
     });
 
     // Auto-detect common columns
     const autoMatch = (patterns) => headers.find(h => patterns.some(p => p.test(h))) || "";
     const set = (id, val) => { if (val) document.getElementById(id).value = val; };
-    set("colScientific", autoMatch([/scientific|latin|taxon.?name|species.?name|recommended.?taxon/i]));
-    set("colCommon",     autoMatch([/common.?name|common\b|english.?name/i]));
+    set("colScientific",  autoMatch([/scientific|latin|taxon.?name|species.?name|recommended.?taxon/i]));
+    set("colCommon",      autoMatch([/common.?name|common\b|english.?name/i]));
+    set("colTaxonGroup",  autoMatch([/taxon.?group|group|taxon.?type|organism.?type|species.?group|category/i]));
     set("colDate",   autoMatch([/date/i]));
     set("colLoc1",   autoMatch([/grid.?ref|ngr|bng|gr\b/i]));
     // Check if lat/lng detected
@@ -3513,12 +3525,13 @@ require([
     status.style.color = "#1a5da0";
     status.textContent = "⏳ Converting coordinates and plotting points…";
 
-    const locType    = document.getElementById("colLocType").value;
-    const colSci     = document.getElementById("colScientific").value;
-    const colCommon  = document.getElementById("colCommon").value;
-    const colDate    = document.getElementById("colDate").value;
-    const colLoc1    = document.getElementById("colLoc1").value;
-    const colLoc2    = document.getElementById("colLoc2").value;
+    const locType       = document.getElementById("colLocType").value;
+    const colSci        = document.getElementById("colScientific").value;
+    const colCommon     = document.getElementById("colCommon").value;
+    const colTaxonGroup = document.getElementById("colTaxonGroup").value;
+    const colDate       = document.getElementById("colDate").value;
+    const colLoc1       = document.getElementById("colLoc1").value;
+    const colLoc2       = document.getElementById("colLoc2").value;
 
     if (!colLoc1) { status.style.color = "#c00"; status.textContent = "✗ Please select a location column."; return; }
     if (!colSci && !colCommon) { status.style.color = "#c00"; status.textContent = "✗ Please map at least a Scientific Name or Common Name column."; return; }
@@ -3545,15 +3558,16 @@ require([
 
       if (!latLng) { fail++; continue; }
 
-      const scientific = colSci    ? (row[colSci]    || "").trim() : "";
-      const common     = colCommon ? (row[colCommon] || "").trim() : "";
-      const date       = colDate   ? (row[colDate]   || "").trim() : "";
-      const label      = common || scientific || "Record";
+      const scientific  = colSci        ? (row[colSci]        || "").trim() : "";
+      const common      = colCommon     ? (row[colCommon]     || "").trim() : "";
+      const taxonGroup  = colTaxonGroup ? (row[colTaxonGroup] || "").trim() : "";
+      const date        = colDate       ? (row[colDate]       || "").trim() : "";
+      const label       = common || scientific || "Record";
       // Extra columns: everything except the mapped ones
-      const mappedCols = new Set([colSci, colCommon, colDate, colLoc1, colLoc2].filter(Boolean));
+      const mappedCols = new Set([colSci, colCommon, colTaxonGroup, colDate, colLoc1, colLoc2].filter(Boolean));
       const extraCols  = _importCols.filter(c => !mappedCols.has(c));
 
-      records.push({ lat: latLng.lat, lng: latLng.lng, scientific, common, date, label, row, _allCols: extraCols });
+      records.push({ lat: latLng.lat, lng: latLng.lng, scientific, common, taxonGroup, date, label, row, _allCols: extraCols });
       ok++;
     }
 
@@ -3573,7 +3587,6 @@ require([
     buildTaxonColours(records);
 
     plotImportRecords(records);
-    zoomToImportRecords(records);
     buildLayerPanel(); // refresh layer panel so new named layers appear
 
     status.style.color = "#1a3d2b";
@@ -3587,6 +3600,10 @@ require([
 
     renderImportLayerResult();
 
+    // Close the modal immediately, then zoom once the overlay is gone
+    closeImportModal();
+    setTimeout(() => zoomToImportRecords(_allImportRecords), 150);
+
     // If a desk study report is already rendered, rebuild it so the LRC section appears
     if (document.getElementById("reportBox").classList.contains("visible") &&
         window._lastResults) {
@@ -3597,36 +3614,46 @@ require([
       );
       renderReport(updatedReport);
     }
-
-    setTimeout(closeImportModal, 1200);
   };
 
   // ── Taxon colour palette ───────────────────────────────────────────────────
-  // Distinct colours that work well on maps (bold but not garish)
+  // Bold, fully-saturated colours for strong map visibility
   const TAXON_PALETTE = [
-    [82,  130, 214],  // blue
-    [220, 80,  60 ],  // red-orange
-    [60,  168, 110],  // green
-    [200, 130, 30 ],  // amber
-    [150, 60,  180],  // purple
-    [0,   180, 200],  // teal
-    [220, 60,  140],  // pink
-    [90,  60,  30 ],  // brown
-    [40,  120, 160],  // steel blue
-    [120, 180, 50 ],  // lime
+    [220,  40,  40],  // red
+    [0,   100, 220],  // blue
+    [20,  160,  50],  // green
+    [230, 130,   0],  // orange
+    [140,   0, 200],  // purple
+    [0,   180, 180],  // cyan
+    [220,   0, 140],  // magenta
+    [100, 160,   0],  // olive-green
+    [0,    80, 160],  // navy
+    [200,  80,   0],  // burnt orange
+    [0,   140,  80],  // emerald
+    [160,   0,  80],  // crimson
   ];
   let _taxonColourMap = {};  // taxon -> [r,g,b]
 
   function buildTaxonColours(records) {
     _taxonColourMap = {};
-    const taxa = [...new Set(records.map(r => r.scientific || r.common || r.label || "Unknown"))];
+    // Colour by taxon group if any record has one, else fall back to scientific name
+    const hasTaxonGroup = records.some(r => r.taxonGroup);
+    const colourKey = hasTaxonGroup
+      ? r => r.taxonGroup || r.scientific || r.common || "Unknown"
+      : r => r.scientific || r.common || r.label || "Unknown";
+    const taxa = [...new Set(records.map(colourKey))];
     taxa.forEach((t, i) => {
       _taxonColourMap[t] = TAXON_PALETTE[i % TAXON_PALETTE.length];
     });
+    _colourByTaxonGroup = hasTaxonGroup;
   }
 
+  let _colourByTaxonGroup = false;
+
   function taxonColour(rec) {
-    const key = rec.scientific || rec.common || rec.label || "Unknown";
+    const key = _colourByTaxonGroup
+      ? (rec.taxonGroup || rec.scientific || rec.common || "Unknown")
+      : (rec.scientific || rec.common || rec.label || "Unknown");
     return _taxonColourMap[key] || TAXON_PALETTE[0];
   }
 
@@ -3655,15 +3682,16 @@ require([
       const hasStatus   = isProtected || isPriority;
 
       const fieldInfos = [
-        { fieldName: "scientific", label: "Scientific name" },
-        { fieldName: "common",     label: "Common name" },
-        { fieldName: "date",       label: "Date" },
-        { fieldName: "_status",    label: "Conservation status" },
+        { fieldName: "scientific",  label: "Scientific name" },
+        { fieldName: "common",      label: "Common name" },
+        { fieldName: "taxonGroup",  label: "Taxon group" },
+        { fieldName: "date",        label: "Date" },
+        { fieldName: "_status",     label: "Conservation status" },
       ];
       (rec._allCols || []).forEach(k => fieldInfos.push({ fieldName: `_col_${k}`, label: k }));
 
       const statusStr = rec._jnccMatch ? rec._jnccMatch.designations.join("; ") : "No designated status";
-      const attrs = { scientific: rec.scientific, common: rec.common, date: rec.date, label: rec.label, _status: statusStr };
+      const attrs = { scientific: rec.scientific, common: rec.common, taxonGroup: rec.taxonGroup || "", date: rec.date, label: rec.label, _status: statusStr };
       (rec._allCols || []).forEach(k => { attrs[`_col_${k}`] = rec.row[k]; });
 
       const popupTemplate = { title: "{label}", content: [{ type: "fields", fieldInfos }] };
@@ -3671,8 +3699,8 @@ require([
       // Main circle marker
       const g = new Graphic({
         geometry: { type: "point", latitude: rec.lat, longitude: rec.lng, spatialReference: { wkid: 4326 } },
-        symbol: { type: "simple-marker", style: "circle", color: [...col, 0.85], size: 8,
-                  outline: { color: [255, 255, 255, 0.9], width: 1.2 } },
+        symbol: { type: "simple-marker", style: "circle", color: [...col, 1], size: 10,
+                  outline: { color: [255, 255, 255, 1], width: 1.5 } },
         attributes: attrs, popupTemplate,
       });
 
@@ -3680,10 +3708,10 @@ require([
       const labelG = new Graphic({
         geometry: { type: "point", latitude: rec.lat, longitude: rec.lng, spatialReference: { wkid: 4326 } },
         symbol: {
-          type: "text", color: [col[0]*0.5, col[1]*0.5, col[2]*0.5, 1],
-          haloColor: [255, 255, 255, 0.9], haloSize: 1.5,
-          text: rec.label, font: { size: 8, family: "sans-serif" },
-          verticalAlignment: "bottom", yoffset: 7,
+          type: "text", color: [col[0], col[1], col[2], 1],
+          haloColor: [255, 255, 255, 1], haloSize: 2,
+          text: rec.label, font: { size: 8, family: "sans-serif", weight: "bold" },
+          verticalAlignment: "bottom", yoffset: 8,
         },
       });
 
@@ -3715,15 +3743,22 @@ require([
       if (r.lng < minLng) minLng = r.lng;
       if (r.lng > maxLng) maxLng = r.lng;
     });
-    const pad = 0.01; // ~1km padding
-    view.goTo({
-      target: {
-        type: "extent",
-        xmin: minLng - pad, ymin: minLat - pad,
-        xmax: maxLng + pad, ymax: maxLat + pad,
-        spatialReference: { wkid: 4326 },
-      }
-    }, { animate: true, duration: 800 });
+
+    // Add padding — at least 0.01° (~1 km), more if points span a large area
+    const latSpan = maxLat - minLat;
+    const lngSpan = maxLng - minLng;
+    const pad = Math.max(0.01, latSpan * 0.15, lngSpan * 0.15);
+
+    const extent = new Extent({
+      xmin: minLng - pad, ymin: minLat - pad,
+      xmax: maxLng + pad, ymax: maxLat + pad,
+      spatialReference: { wkid: 4326 },
+    });
+
+    view.goTo({ target: extent }, { animate: true, duration: 800 }).catch(() => {
+      // Fallback: set extent directly if goTo fails
+      view.extent = extent;
+    });
   }
 
   // ── Import layer results box ───────────────────────────────────────────────
@@ -3774,7 +3809,12 @@ require([
 
     // Taxon legend rows with protection badges
     taxa.forEach(taxon => {
-      const recs        = _allImportRecords.filter(r => (r.scientific || r.common || r.label || "Unknown") === taxon);
+      const recs = _allImportRecords.filter(r => {
+        const key = _colourByTaxonGroup
+          ? (r.taxonGroup || r.scientific || r.common || "Unknown")
+          : (r.scientific || r.common || r.label || "Unknown");
+        return key === taxon;
+      });
       const col         = _taxonColourMap[taxon];
       const hasLegal    = recs.some(r => r._isLegallyProtected);
       const hasPriority = recs.some(r => r._isPriority);
@@ -3841,7 +3881,8 @@ require([
 
     const filtered = _allImportRecords.filter(rec => {
       if (taxonFilter && !rec.scientific.toLowerCase().includes(taxonFilter) &&
-                         !rec.common.toLowerCase().includes(taxonFilter)) return false;
+                         !rec.common.toLowerCase().includes(taxonFilter) &&
+                         !(rec.taxonGroup || "").toLowerCase().includes(taxonFilter)) return false;
       if (dateFrom && rec.date && rec.date < dateFrom) return false;
       if (dateTo   && rec.date && rec.date > dateTo)   return false;
       if (filterLegal    && !rec._isLegallyProtected) return false;
@@ -4341,16 +4382,20 @@ require([
             <select id="colCommon" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
           </div>
           <div>
+            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Taxon Group <span style="font-size:9px;color:#888;">(e.g. Amphibian, Bird)</span></label>
+            <select id="colTaxonGroup" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Date</label>
+            <select id="colDate" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
+          </div>
+          <div style="grid-column:1/-1;">
             <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Location Format <span style="color:#c00;">*</span></label>
             <select id="colLocType" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;" onchange="updateLocCols()">
               <option value="bng">British National Grid (e.g. ST123456)</option>
               <option value="latlng">Latitude / Longitude</option>
               <option value="xy">Easting / Northing (BNG metres)</option>
             </select>
-          </div>
-          <div>
-            <label style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Date</label>
-            <select id="colDate" style="width:100%;padding:4px 6px;border:1px solid #c9dece;border-radius:4px;font-size:11px;"></select>
           </div>
           <div id="locCol1Wrap">
             <label id="locCol1Label" style="font-size:10px;color:#6b7c6f;display:block;margin-bottom:2px;">Grid Reference column <span style="color:#c00;">*</span></label>

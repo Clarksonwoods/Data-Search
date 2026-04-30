@@ -940,6 +940,8 @@ require([
   "esri/identity/OAuthInfo",
   "esri/identity/IdentityManager",
   "esri/layers/GraphicsLayer",
+  "esri/layers/WebTileLayer",
+  "esri/Basemap",
   "esri/widgets/Sketch/SketchViewModel",
 ], function(
   Map, MapView, WebMap,
@@ -947,7 +949,8 @@ require([
   Extent,
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager,
-  GraphicsLayer, SketchViewModel
+  GraphicsLayer, WebTileLayer, Basemap,
+  SketchViewModel
 ) {
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1511,6 +1514,22 @@ require([
   }
 
   view.when(() => {
+    // ── Add OSM Streets as the bottom basemap layer ───────────────────────────
+    // OSM is treated as part of the basemap (lives in webMap.basemap.baseLayers,
+    // not webMap.layers) so it is never touched by hideDesignationLayers.
+    const osmLayer = new WebTileLayer({
+      urlTemplate: "https://{subDomain}.tile.openstreetmap.org/{level}/{col}/{row}.png",
+      subDomains: ["a", "b", "c"],
+      title: "OpenStreetMap Streets",
+      copyright: "© OpenStreetMap contributors",
+      opacity: 1,
+    });
+
+    // Wait for the basemap to load, then insert OSM beneath existing base layers
+    webMap.basemap.load().then(() => {
+      webMap.basemap.baseLayers.unshift(osmLayer);
+    });
+
     buildLayerPanel();
     buildBufferGroups();
     hideDesignationLayers();   // performance: hide everything except basemap + RLB on load
@@ -1525,9 +1544,23 @@ require([
     return CONFIG.redLineTitlePattern.test(layer.title || "");
   }
 
-  // Walk a layer tree and set visibility, skipping always-visible layers
+  // Returns true if this layer or any descendant matches the always-visible pattern
+  function containsAlwaysVisible(layer) {
+    if (isAlwaysVisible(layer)) return true;
+    if (layer.layers) return layer.layers.some(child => containsAlwaysVisible(child));
+    return false;
+  }
+
+  // Walk a layer tree and set visibility, skipping always-visible layers and
+  // any group that contains one (so the RLB group stays on even if other children are off)
   function setLayerTreeVisible(layer, visible) {
-    if (isAlwaysVisible(layer)) return;
+    if (isAlwaysVisible(layer)) return;          // never hide the RLB layer itself
+    if (!visible && containsAlwaysVisible(layer)) {
+      // This group contains the RLB — keep the group on but hide its non-RLB children
+      layer.visible = true;
+      if (layer.layers) layer.layers.forEach(child => setLayerTreeVisible(child, false));
+      return;
+    }
     layer.visible = visible;
     if (layer.layers) layer.layers.forEach(child => setLayerTreeVisible(child, visible));
   }
@@ -4679,73 +4712,89 @@ require([
     popup.style.top  = top  + "px";
   }
 
-  // ── Right-click handler on the map view
-  view.on("context-menu", async function(event) {
-    event.native.preventDefault();
+  // ── Right-click location popup ────────────────────────────────────────────
+  // ArcGIS 4.x has no "context-menu" view event — attach to the container's
+  // native DOM event and convert screen → map coordinates via view.toMap().
+  view.when(() => {
+    view.container.addEventListener("contextmenu", async function(e) {
+      e.preventDefault();
+      e.stopPropagation();
 
-    const popup = document.getElementById("locationPopup");
-    const body  = document.getElementById("locationPopupBody");
+      const popup = document.getElementById("locationPopup");
+      const body  = document.getElementById("locationPopupBody");
 
-    // Show immediately with loading state
-    body.innerHTML = `<div class="loc-loading">⏳ Getting location data…</div>`;
-    popup.style.display = "block";
-    positionPopup(event.native.clientX, event.native.clientY);
+      // Show immediately with loading state
+      body.innerHTML = `<div class="loc-loading">Getting location data...</div>`;
+      popup.style.display = "block";
+      positionPopup(e.clientX, e.clientY);
 
-    // Convert map point to WGS84
-    const mp  = event.mapPoint;
-    const lat = mp.latitude;
-    const lng = mp.longitude;
-
-    const { rows } = buildLocationRows(lat, lng);
-    const { E, N } = latLngToEN(lat, lng);
-    const gr8 = enToBNG(E, N, 4);
-
-    // Render coordinate rows + external links immediately
-    body.innerHTML =
-      renderLocationRows(rows) +
-      renderLocationLinks(lat, lng) +
-      `<hr class="loc-divider">` +
-      `<div class="loc-loading" id="locAddrLine">🔍 Fetching address…</div>`;
-
-    // Re-position now content is rendered (height may have changed)
-    positionPopup(event.native.clientX, event.native.clientY);
-
-    // Async: reverse geocode via ArcGIS World Geocoding REST (no extra module needed)
-    try {
-      const gcUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode` +
-        `?location=${lng},${lat}&langCode=en&outSR=4326&f=json`;
-      const gcRes = await fetch(gcUrl);
-      const gcJson = await gcRes.json();
-      const addrEl = document.getElementById("locAddrLine");
-      if (addrEl) {
-        if (gcJson.address) {
-          const addr    = gcJson.address.Address    || "";
-          const city    = gcJson.address.City       || "";
-          const postcode= gcJson.address.Postal     || "";
-          const parts   = [addr, city, postcode].filter(Boolean).join(", ");
-          addrEl.outerHTML = `
-            <div class="loc-row">
-              <span class="loc-label">Address</span>
-              <span class="loc-value non-mono" id="locval-Address" title="${parts}" style="white-space:normal;line-height:1.3;">${parts}</span>
-              <button class="loc-copy" onclick="copyLocValue('Address',this)">copy</button>
-            </div>
-            ${postcode ? `<div class="loc-row">
-              <span class="loc-label">Postcode</span>
-              <span class="loc-value" id="locval-Postcode">${postcode}</span>
-              <button class="loc-copy" onclick="copyLocValue('Postcode',this)">copy</button>
-            </div>` : ""}`;
-        } else {
-          addrEl.textContent = "Address not available";
-        }
+      // Convert screen point to WGS84 map point
+      const rect = view.container.getBoundingClientRect();
+      const screenPoint = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top
+      };
+      const mp  = view.toMap(screenPoint);
+      if (!mp) {
+        body.innerHTML = `<div class="loc-loading">Could not determine map location.</div>`;
+        return;
       }
-    } catch(e) {
-      const addrEl = document.getElementById("locAddrLine");
-      if (addrEl) addrEl.textContent = "Address lookup failed";
-    }
+
+      const lat = mp.latitude;
+      const lng = mp.longitude;
+
+      const { rows } = buildLocationRows(lat, lng);
+
+      // Render coordinate rows + external links immediately
+      body.innerHTML =
+        renderLocationRows(rows) +
+        renderLocationLinks(lat, lng) +
+        `<hr class="loc-divider">` +
+        `<div class="loc-loading" id="locAddrLine">Fetching address...</div>`;
+
+      // Re-position now content is rendered (height may have changed)
+      positionPopup(e.clientX, e.clientY);
+
+      // Async: reverse geocode via ArcGIS World Geocoding REST
+      try {
+        const gcUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode` +
+          `?location=${lng},${lat}&langCode=en&outSR=4326&f=json`;
+        const gcRes  = await fetch(gcUrl);
+        const gcJson = await gcRes.json();
+        const addrEl = document.getElementById("locAddrLine");
+        if (addrEl) {
+          if (gcJson.address) {
+            const addr     = gcJson.address.Address || "";
+            const city     = gcJson.address.City    || "";
+            const postcode = gcJson.address.Postal  || "";
+            const parts    = [addr, city, postcode].filter(Boolean).join(", ");
+            addrEl.outerHTML = `
+              <div class="loc-row">
+                <span class="loc-label">Address</span>
+                <span class="loc-value non-mono" id="locval-Address" title="${parts}"
+                  style="white-space:normal;line-height:1.3;">${parts}</span>
+                <button class="loc-copy" onclick="copyLocValue('Address',this)">copy</button>
+              </div>
+              ${postcode ? `<div class="loc-row">
+                <span class="loc-label">Postcode</span>
+                <span class="loc-value" id="locval-Postcode">${postcode}</span>
+                <button class="loc-copy" onclick="copyLocValue('Postcode',this)">copy</button>
+              </div>` : ""}`;
+          } else {
+            addrEl.textContent = "Address not available";
+          }
+        }
+      } catch(err) {
+        const addrEl = document.getElementById("locAddrLine");
+        if (addrEl) addrEl.textContent = "Address lookup failed";
+      }
+    });
   });
 
-  // Close popup on map click or Escape
-  view.on("click", () => closeLocationPopup());
+  // Close popup on left-click anywhere on the map or Escape
+  view.when(() => {
+    view.container.addEventListener("click", () => closeLocationPopup());
+  });
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeLocationPopup(); });
 
 }); // end require

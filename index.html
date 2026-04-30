@@ -1718,22 +1718,6 @@ require([
   }
 
   view.when(() => {
-    // ── Add OSM Streets as the bottom basemap layer ───────────────────────────
-    // OSM is treated as part of the basemap (lives in webMap.basemap.baseLayers,
-    // not webMap.layers) so it is never touched by hideDesignationLayers.
-    const osmLayer = new WebTileLayer({
-      urlTemplate: "https://{subDomain}.tile.openstreetmap.org/{level}/{col}/{row}.png",
-      subDomains: ["a", "b", "c"],
-      title: "OpenStreetMap Streets",
-      copyright: "© OpenStreetMap contributors",
-      opacity: 1,
-    });
-
-    // Wait for the basemap to load, then insert OSM beneath existing base layers
-    webMap.basemap.load().then(() => {
-      webMap.basemap.baseLayers.unshift(osmLayer);
-    });
-
     buildLayerPanel();
     buildBufferGroups();
     hideDesignationLayers();   // performance: hide everything except basemap + RLB on load

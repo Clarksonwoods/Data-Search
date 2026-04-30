@@ -967,9 +967,10 @@
       <div id="importFilters" style="display:none;margin-bottom:10px;">
         <div class="section-label" style="margin-top:10px;">Record Filters</div>
         <div style="display:flex;flex-direction:column;gap:5px;">
-          <input id="filterTaxon" type="text" placeholder="Filter by taxon…"
-            style="padding:4px 8px;border:1px solid var(--line);border-radius:4px;font-size:11px;font-family:'Georgia',serif;"
-            oninput="applyRecordFilters()"/>
+          <select id="filterTaxon" onchange="applyRecordFilters()"
+            style="width:100%;padding:4px 8px;border:1px solid var(--line);border-radius:4px;font-size:11px;font-family:'Georgia',serif;background:var(--surface);">
+            <option value="">All taxa</option>
+          </select>
           <div style="display:flex;gap:4px;align-items:center;">
             <input id="filterDateFrom" type="date" style="flex:1;padding:4px;border:1px solid var(--line);border-radius:4px;font-size:11px;" oninput="applyRecordFilters()"/>
             <span style="font-size:10px;color:var(--ink-faint)">to</span>
@@ -1110,34 +1111,48 @@ require([
   "esri/WebMap",
   "esri/geometry/geometryEngineAsync",
   "esri/geometry/Extent",
-  "esri/geometry/support/webMercatorUtils",
   "esri/Graphic",
   "esri/rest/query",
   "esri/rest/support/Query",
   "esri/identity/OAuthInfo",
   "esri/identity/IdentityManager",
   "esri/layers/GraphicsLayer",
-  "esri/layers/WebTileLayer",
-  "esri/layers/TileLayer",
-  "esri/layers/VectorTileLayer",
-  "esri/Basemap",
-  "esri/portal/Portal",
-  "esri/portal/PortalItem",
-  "esri/widgets/Sketch/SketchViewModel",
 ], function(
   Map, MapView, WebMap,
   geometryEngineAsync,
   Extent,
-  webMercatorUtils,
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager,
-  GraphicsLayer, WebTileLayer, TileLayer, VectorTileLayer, Basemap,
-  Portal, PortalItem,
-  SketchViewModel
+  GraphicsLayer
 ) {
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // ██  CONFIG
+  // ── Lazy module loaders ───────────────────────────────────────────────────
+  // These modules are NOT in the eager require() call above.
+  // Each loader returns a cached promise so the require fires only once.
+
+  let _sketchMods = null;
+  function loadSketchMods() {
+    if (!_sketchMods) _sketchMods = new Promise(res =>
+      require(["esri/widgets/Sketch/SketchViewModel"], res));
+    return _sketchMods;
+  }
+
+  let _layerMods = null;
+  function loadLayerMods() {
+    if (!_layerMods) _layerMods = new Promise(res =>
+      require(["esri/layers/WebTileLayer","esri/layers/TileLayer","esri/layers/VectorTileLayer"], (WTL,TL,VTL) => res({WebTileLayer:WTL,TileLayer:TL,VectorTileLayer:VTL})));
+    return _layerMods;
+  }
+
+  let _basemapMods = null;
+  function loadBasemapMods() {
+    if (!_basemapMods) _basemapMods = new Promise(res =>
+      require(["esri/Basemap","esri/portal/Portal","esri/portal/PortalItem"], (BM,P,PI) => res({Basemap:BM,Portal:P,PortalItem:PI})));
+    return _basemapMods;
+  }
+
+  // Expose at module scope for use throughout — populated lazily
+  let WebTileLayer, TileLayer, VectorTileLayer, Basemap, Portal, PortalItem, SketchViewModel;
   // ══════════════════════════════════════════════════════════════════════════
   const CONFIG = {
 
@@ -1669,6 +1684,12 @@ require([
 
       Object.values(lookup).forEach(v => { v.designations = [...v.designations].sort(); });
       jnccLookup = lookup;
+
+      // If records were already imported before JNCC loaded, re-annotate them now
+      if (_allImportRecords && _allImportRecords.length > 0) {
+        annotateProtectionStatus(_allImportRecords);
+        renderImportLayerResult(); // refresh sidebar legend badges
+      }
       const n = Object.keys(lookup).length;
 
       // Quick sanity check — find any BoCC5 entries to confirm matching worked
@@ -1777,9 +1798,10 @@ require([
     if (visible) _designationLayersRevealed = true;
 
     webMap.layers.forEach(layer => setLayerTreeVisible(layer, visible));
-    // Also toggle the GraphicsLayers we added (import layers) if they exist
+    // Also toggle the import layers — but never hide the pin layer
     if (typeof importLayer          !== "undefined") importLayer.visible          = visible;
     if (typeof importProtectedLayer !== "undefined") importProtectedLayer.visible = visible;
+    // pinLayer stays always visible so pins are never accidentally hidden
 
     buildLayerPanel();
     updateAllOnOffButtons();
@@ -1808,6 +1830,16 @@ require([
     if (isOpen) {
       document.getElementById("basemapPanel").classList.remove("open");
       document.getElementById("basemapToggleBtn").classList.remove("active");
+
+      // Run any deferred layer load checks now the panel is visible
+      document.querySelectorAll("[data-pending-load-check='1']").forEach(row => {
+        row.dataset.pendingLoadCheck = "0";
+        const layer = row._layer;
+        if (!layer) return;
+        const check = row.querySelector(".lp-layer-check");
+        const lbl   = row.querySelector(".lp-layer-label");
+        layer.load().catch(err => markLayerUnavailable(row, check, lbl, err));
+      });
     }
   };
 
@@ -1815,10 +1847,79 @@ require([
     const body = document.getElementById("layerPanelBody");
     body.innerHTML = "";
 
-    // Render layers in reverse so top layers appear first (matches map draw order)
-    const allLayers = webMap.layers.toArray().slice().reverse();
+    // Render layers in reverse (top layers first), skipping hidden-from-list ones
+    const allLayers = webMap.layers.toArray().slice().reverse()
+      .filter(l => l.listMode !== "hide" && l.title);
     allLayers.forEach(layer => renderLayerRow(layer, body, 0));
     updateAllOnOffButtons();
+  }
+
+  // ── Swatch colour lookup ──────────────────────────────────────────────────
+  // Known-colour map for common designation layers — derived from standard
+  // Natural England / SNH / NRW cartographic conventions.
+  const LAYER_COLOUR_MAP = {
+    // International / European
+    "special area of conservation":   "#6a3d9a",
+    "sac":                             "#6a3d9a",
+    "special protection area":         "#ff7f00",
+    "spa":                             "#ff7f00",
+    "ramsar":                          "#1f78b4",
+    "world heritage":                  "#e31a1c",
+    "biosphere":                       "#33a02c",
+    // National
+    "site of special scientific interest": "#e6550d",
+    "sssi":                            "#e6550d",
+    "national nature reserve":         "#1a9850",
+    "nnr":                             "#1a9850",
+    "local nature reserve":            "#74c476",
+    "lnr":                             "#74c476",
+    "ancient woodland":                "#006d2c",
+    "priority habitat":                "#41ab5d",
+    "local wildlife site":             "#fd8d3c",
+    "lws":                             "#fd8d3c",
+    "aonb":                            "#d4b483",
+    "national park":                   "#78c679",
+    "green belt":                      "#c7e9c0",
+    "listed building":                 "#969696",
+    "scheduled monument":              "#756bb1",
+    "conservation area":               "#9ecae1",
+    "flood":                           "#3182bd",
+    "flood risk":                      "#3182bd",
+    "land registry":                   "#d9d9d9",
+    "imported species":                "#2ca02c",
+    "right-click pins":                "#dc3c00",
+  };
+
+  function getLayerSwatchColour(layer) {
+    if (!layer) return "#aaa";
+
+    // 1. Renderer symbol colour (works for FeatureLayer with simple renderer)
+    try {
+      const sym = layer.renderer?.symbol || layer.renderer?.defaultSymbol;
+      const col = sym?.color;
+      if (col && (col.r != null || col.g != null)) {
+        return `rgba(${col.r ?? 128},${col.g ?? 128},${col.b ?? 128},${col.a ?? 1})`;
+      }
+    } catch(e) {}
+
+    // 2. Match on layer title keywords (case-insensitive)
+    if (layer.title) {
+      const t = layer.title.toLowerCase();
+      for (const [key, colour] of Object.entries(LAYER_COLOUR_MAP)) {
+        if (t.includes(key)) return colour;
+      }
+    }
+
+    // 3. Deterministic colour from title hash — better than flat grey
+    if (layer.title) {
+      let hash = 0;
+      for (let i = 0; i < layer.title.length; i++) hash = (hash * 31 + layer.title.charCodeAt(i)) >>> 0;
+      const PALETTE = ["#4e79a7","#f28e2b","#e15759","#76b7b2","#59a14f",
+                       "#edc948","#b07aa1","#ff9da7","#9c755f","#bab0ac"];
+      return PALETTE[hash % PALETTE.length];
+    }
+
+    return "#aaa";
   }
 
   function renderLayerRow(layer, container, depth) {
@@ -1893,15 +1994,10 @@ require([
         layer.visible = check.checked;
       });
 
-      // Colour swatch — try to get renderer colour
+      // ── Swatch colour — multi-strategy ────────────────────────────
       const swatch = document.createElement("span");
       swatch.className = "lp-layer-swatch";
-      try {
-        const sym = layer.renderer?.symbol || layer.renderer?.defaultSymbol;
-        const col = sym?.color;
-        if (col) swatch.style.background = `rgba(${col.r},${col.g},${col.b},${col.a ?? 1})`;
-        else swatch.style.background = "#aaa";
-      } catch(e) { swatch.style.background = "#aaa"; }
+      swatch.style.background = getLayerSwatchColour(layer);
 
       const label = document.createElement("span");
       label.className = "lp-layer-label";
@@ -1911,11 +2007,15 @@ require([
       row.appendChild(swatch);
       row.appendChild(label);
 
-      // Mark WMS/feature layers that fail to load (e.g. CORS-blocked) as unavailable
+      // Mark WMS/feature layers that fail to load (e.g. CORS-blocked) as unavailable.
+      // Only call load() once the panel is actually opened — not at buildLayerPanel time —
+      // to avoid triggering network requests for every layer on startup.
       if (layer.loadStatus === "failed" || layer.loadError) {
         markLayerUnavailable(row, check, label, layer.loadError);
       } else if (isWms || layer.type === "feature") {
-        layer.load().catch(err => markLayerUnavailable(row, check, label, err));
+        // Defer the load check to when the panel becomes visible
+        row.dataset.pendingLoadCheck = "1";
+        row._layer = layer;
       }
 
       // Clicking the row (not checkbox) also toggles
@@ -1959,16 +2059,17 @@ require([
   view.map.add(drawLayer);
 
   // ── Import species layers (named so they appear in the layer panel) ────────
-  const importLayer          = new GraphicsLayer({ title: "Imported Species Records",    listMode: "show", visible: true });
-  const importProtectedLayer = new GraphicsLayer({ title: "Protected / Priority Species", listMode: "show", visible: true });
-  const pinLayer             = new GraphicsLayer({ title: "Right-click Pins", listMode: "show", visible: true });
+  const importLayer          = new GraphicsLayer({ title: "Imported Species Records", listMode: "show",  visible: true });
+  const importProtectedLayer = new GraphicsLayer({ title: "Protected / Priority Species", listMode: "hide", visible: true });
+  const pinLayer             = new GraphicsLayer({ title: "Right-click Pins",          listMode: "hide", visible: true });
   view.map.add(importLayer);
   view.map.add(importProtectedLayer);
   view.map.add(pinLayer);
   let sketchVM = null;
 
-  function getSketchVM() {
+  async function getSketchVM() {
     if (!sketchVM) {
+      SketchViewModel = await loadSketchMods();
       sketchVM = new SketchViewModel({
         view,
         layer: drawLayer,
@@ -1998,7 +2099,7 @@ require([
     return sketchVM;
   }
 
-  window.startDraw = function() {
+  window.startDraw = async function() {
     // Cancel any active click-selection
     if (clickHandler) { clickHandler.remove(); clickHandler = null; }
     document.getElementById("btnSelect").classList.remove("selecting", "selected");
@@ -2016,7 +2117,7 @@ require([
     setStatus("info", "Click to place polygon vertices. Double-click to complete the boundary.");
     view.cursor = "crosshair";
 
-    getSketchVM().create("polygon", { mode: "click" });
+    (await getSketchVM()).create("polygon", { mode: "click" });
   };
 
   // ── Buffer group state ────────────────────────────────────────────────────
@@ -3669,6 +3770,8 @@ require([
       document.getElementById("btnImport").classList.remove("active");
       document.getElementById("btnImportLabel").textContent = "Import Species Records";
       document.getElementById("importFilters").style.display = "none";
+      const taxonSel = document.getElementById("filterTaxon");
+      if (taxonSel) { taxonSel.innerHTML = '<option value="">All taxa</option>'; }
       const filterLegal = document.getElementById("filterLegal");
       const filterPriority = document.getElementById("filterPriority");
       if (filterLegal)    filterLegal.checked = false;
@@ -3741,6 +3844,8 @@ require([
     _importRows = []; _importCols = [];
     const tgEl = document.getElementById("colTaxonGroup");
     if (tgEl) tgEl.innerHTML = "";
+    // Pre-load JNCC data so protection filters work even without running a desk study
+    if (!jnccLookup && !jnccLoading) loadJncc();
   };
 
   window.closeImportModal = function() {
@@ -4039,13 +4144,18 @@ require([
     annotateProtectionStatus(records);
 
     _allImportRecords = records;
-    _importColumnNames = _importCols.slice(); // remember all column names
+    _importColumnNames = _importCols.slice();
 
-    // Build taxon colour palette
+    // Build taxon colour palette and populate filter dropdown
     buildTaxonColours(records);
+    populateTaxonFilter(records);
 
     plotImportRecords(records);
-    buildLayerPanel(); // refresh layer panel so new named layers appear
+    // Always make the import layers visible immediately after plotting,
+    // regardless of any prior "All off" state or hideDesignationLayers call.
+    importLayer.visible          = true;
+    importProtectedLayer.visible = true;
+    buildLayerPanel();
 
     status.style.color = "#1a3d2b";
     status.textContent = `✓ ${ok} records plotted${fail ? ` (${fail} failed to convert)` : ""}.`;
@@ -4345,14 +4455,61 @@ require([
     _importProtectedGraphics = [];
   }
 
+  // ── Populate taxon filter dropdown from imported records ──────────────────
+  function populateTaxonFilter(records) {
+    const sel = document.getElementById("filterTaxon");
+    if (!sel) return;
+    const current = sel.value;
+
+    // Build unique options: taxon groups if present, else scientific names
+    const hasTaxonGroup = records.some(r => r.taxonGroup);
+    const values = new Set();
+    records.forEach(r => {
+      if (hasTaxonGroup && r.taxonGroup) values.add(r.taxonGroup);
+      if (r.scientific) values.add(r.scientific);
+      if (r.common)     values.add(r.common);
+    });
+
+    // Group: taxon groups first (if any), then species alphabetically
+    const groups  = [...new Set(records.map(r => r.taxonGroup).filter(Boolean))].sort();
+    const species = [...new Set(records.flatMap(r => [r.scientific, r.common].filter(Boolean)))].sort();
+
+    sel.innerHTML = `<option value="">All taxa</option>`;
+
+    if (groups.length > 0) {
+      const grpOpt = document.createElement("optgroup");
+      grpOpt.label = "Taxon groups";
+      groups.forEach(g => {
+        const o = document.createElement("option");
+        o.value = o.textContent = g;
+        grpOpt.appendChild(o);
+      });
+      sel.appendChild(grpOpt);
+    }
+
+    if (species.length > 0) {
+      const sppOpt = document.createElement("optgroup");
+      sppOpt.label = "Species";
+      species.forEach(s => {
+        const o = document.createElement("option");
+        o.value = o.textContent = s;
+        sppOpt.appendChild(o);
+      });
+      sel.appendChild(sppOpt);
+    }
+
+    // Restore previous selection if still valid
+    if (current && [...sel.options].some(o => o.value === current)) sel.value = current;
+  }
+
   // ── Filters ────────────────────────────────────────────────────────────────
   window.applyRecordFilters = function() {
-    const taxonFilter    = document.getElementById("filterTaxon").value.trim().toLowerCase();
-    const dateFrom       = document.getElementById("filterDateFrom").value;
-    const dateTo         = document.getElementById("filterDateTo").value;
-    const filterLegal    = document.getElementById("filterLegal")?.checked;
-    const filterPriority = document.getElementById("filterPriority")?.checked;
-    const maxPrecision   = parseInt(document.getElementById("filterResolution")?.value || "0");
+    const taxonVal      = document.getElementById("filterTaxon")?.value || "";
+    const dateFrom      = document.getElementById("filterDateFrom").value;
+    const dateTo        = document.getElementById("filterDateTo").value;
+    const filterLegal   = document.getElementById("filterLegal")?.checked;
+    const filterPriority= document.getElementById("filterPriority")?.checked;
+    const maxPrecision  = parseInt(document.getElementById("filterResolution")?.value || "0");
 
     // Update the resolution hint
     const hint = document.getElementById("filterResolutionHint");
@@ -4366,9 +4523,12 @@ require([
     }
 
     const filtered = _allImportRecords.filter(rec => {
-      if (taxonFilter && !rec.scientific.toLowerCase().includes(taxonFilter) &&
-                         !rec.common.toLowerCase().includes(taxonFilter) &&
-                         !(rec.taxonGroup || "").toLowerCase().includes(taxonFilter)) return false;
+      if (taxonVal) {
+        const match = rec.taxonGroup === taxonVal ||
+                      rec.scientific === taxonVal ||
+                      rec.common     === taxonVal;
+        if (!match) return false;
+      }
       if (dateFrom && rec.date && rec.date < dateFrom) return false;
       if (dateTo   && rec.date && rec.date > dateTo)   return false;
       if (filterLegal    && !rec._isLegallyProtected) return false;
@@ -5034,15 +5194,16 @@ require([
   // ── Right-click pins ──────────────────────────────────────────────────────
   let _pinCount = 0;
 
-  function dropPin(lat, lng, label) {
+  // ── Pin data stored per-pin for click-to-reopen ──────────────────────────
+  const _pinData = []; // { num, lat, lng, label, mp }
+
+  function dropPin(mapPoint, label) {
     _pinCount++;
     const num = _pinCount;
-
-    // Pin symbol: white circle with coloured border + number label
-    const pinColour = [220, 60, 0]; // vivid orange-red
+    const pinColour = [220, 60, 0];
 
     const markerG = new Graphic({
-      geometry: { type: "point", latitude: lat, longitude: lng, spatialReference: { wkid: 4326 } },
+      geometry: mapPoint,
       symbol: {
         type: "simple-marker",
         style: "circle",
@@ -5050,10 +5211,11 @@ require([
         size: 14,
         outline: { color: [255, 255, 255, 1], width: 2 },
       },
+      attributes: { _pinNum: num, _pinLabel: label },
     });
 
     const labelG = new Graphic({
-      geometry: { type: "point", latitude: lat, longitude: lng, spatialReference: { wkid: 4326 } },
+      geometry: mapPoint,
       symbol: {
         type: "text",
         text: String(num),
@@ -5064,9 +5226,8 @@ require([
       },
     });
 
-    // Outer callout label below pin
     const calloutG = new Graphic({
-      geometry: { type: "point", latitude: lat, longitude: lng, spatialReference: { wkid: 4326 } },
+      geometry: mapPoint,
       symbol: {
         type: "text",
         text: label || `Pin ${num}`,
@@ -5080,6 +5241,7 @@ require([
     });
 
     pinLayer.addMany([markerG, labelG, calloutG]);
+    _pinData.push({ num, mp: mapPoint, label: label || `Pin ${num}` });
     updatePinCount();
   }
 
@@ -5094,6 +5256,7 @@ require([
   window.clearLocationPins = function() {
     pinLayer.removeAll();
     _pinCount = 0;
+    _pinData.length = 0;
     updatePinCount();
   };
   // ArcGIS 4.x has no "context-menu" view event — attach to the container's
@@ -5162,10 +5325,11 @@ require([
 
       const { rows } = buildLocationRows(lat, lng);
 
-      // Drop a numbered pin at this location (retained across right-clicks)
+      // Drop a numbered pin at this location using the raw map point
+      // (already in the map's SR — avoids any reprojection issues)
       const { E, N } = latLngToEN(lat, lng);
       const gr6 = enToBNG(E, N, 3);
-      dropPin(lat, lng, gr6);
+      dropPin(mp, gr6);
 
       // Render coordinate rows + external links immediately
       body.innerHTML =
@@ -5213,9 +5377,48 @@ require([
     });
   });
 
-  // Close popup on left-click anywhere on the map or Escape
+  // Left-click: if it hits a pin — reopen the popup for that pin.
+  // Otherwise close the popup.
   view.when(() => {
-    view.container.addEventListener("click", () => closeLocationPopup());
+    view.on("click", async function(event) {
+      // Hit-test against the pin layer only
+      const { results } = await view.hitTest(event, { include: [pinLayer] });
+      const pinHit = results.find(r => r.graphic && r.graphic.attributes && r.graphic.attributes._pinNum != null);
+
+      if (pinHit) {
+        // Find stored pin data
+        const pinNum = pinHit.graphic.attributes._pinNum;
+        const pin    = _pinData.find(p => p.num === pinNum);
+        if (!pin) return;
+
+        const mp = pin.mp;
+        const wkid = mp.spatialReference && (mp.spatialReference.wkid || mp.spatialReference.latestWkid);
+        let lat, lng;
+        if (mp.latitude != null && isFinite(mp.latitude) && mp.latitude >= -90 && mp.latitude <= 90) {
+          lat = mp.latitude; lng = mp.longitude;
+        } else if (wkid === 27700 || wkid === 7405) {
+          const geo = enToLatLng(mp.x, mp.y); lat = geo.lat; lng = geo.lng;
+        } else {
+          const R = 6378137;
+          lng = (mp.x / R) * (180 / Math.PI);
+          lat = (2 * Math.atan(Math.exp(mp.y / R)) - Math.PI / 2) * (180 / Math.PI);
+        }
+
+        const popup = document.getElementById("locationPopup");
+        const body  = document.getElementById("locationPopupBody");
+        const { rows } = buildLocationRows(lat, lng);
+        body.innerHTML =
+          `<div style="font-size:11px;font-weight:bold;color:var(--ink-mid);padding-bottom:4px;">📍 Pin ${pinNum} — ${pin.label}</div>` +
+          renderLocationRows(rows) +
+          renderLocationLinks(lat, lng);
+        popup.style.display = "block";
+        positionPopup(event.native.clientX, event.native.clientY);
+        return;
+      }
+
+      // No pin hit — close the popup
+      closeLocationPopup();
+    });
   });
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeLocationPopup(); });
 
@@ -5251,46 +5454,32 @@ require([
     body.innerHTML = `<div style="grid-column:1/-1;padding:8px;font-size:11px;color:var(--ink-faint)">Loading basemaps…</div>`;
 
     try {
+      const mods = await loadBasemapMods();
+      Basemap = mods.Basemap; Portal = mods.Portal; PortalItem = mods.PortalItem;
+
       const portal = new Portal({ url: CONFIG.portalUrl });
       await portal.load();
       _portal = portal;
 
       let items = [];
 
-      // ── Strategy 1: use the portal's configured basemap gallery group
       if (portal.basemapGalleryGroupQuery) {
         try {
-          const groups = await portal.queryGroups({
-            query: portal.basemapGalleryGroupQuery,
-            num: 1,
-          });
+          const groups = await portal.queryGroups({ query: portal.basemapGalleryGroupQuery, num: 1 });
           if (groups.results.length > 0) {
-            const grpItems = await groups.results[0].queryItems({
-              num: 50,
-              sortField: "title",
-              sortOrder: "asc",
-            });
+            const grpItems = await groups.results[0].queryItems({ num: 50, sortField: "title", sortOrder: "asc" });
             items = grpItems.results;
           }
         } catch(e) { /* fall through */ }
       }
 
-      // ── Strategy 2: query org for items tagged as basemaps
       if (items.length === 0) {
-        const res = await portal.queryItems({
-          query: 'type:"Web Map" typekeywords:"basemap"',
-          num: 40,
-          sortField: "title",
-          sortOrder: "asc",
-        });
+        const res = await portal.queryItems({ query: 'type:"Web Map" typekeywords:"basemap"', num: 40, sortField: "title", sortOrder: "asc" });
         items = res.results;
       }
 
-      // ── Strategy 3: well-known Esri basemap IDs as guaranteed fallback
       if (items.length === 0) {
-        items = ESRI_BASEMAP_FALLBACKS.map(b => ({
-          id: b.id, title: b.title, thumbnailUrl: null, _isFallback: true,
-        }));
+        items = ESRI_BASEMAP_FALLBACKS.map(b => ({ id: b.id, title: b.title, thumbnailUrl: null }));
       }
 
       if (items.length === 0) {
@@ -5363,76 +5552,54 @@ require([
     return div;
   }
 
-  function applyBasemap(item, card) {
+  async function applyBasemap(item, card) {
     _activeBasemapId = item.id;
-
-    document.querySelectorAll(".bm-card").forEach(c => {
-      c.classList.remove("active");
-      c.style.opacity = "1";
-    });
+    document.querySelectorAll(".bm-card").forEach(c => { c.classList.remove("active"); c.style.opacity = "1"; });
     card.classList.add("active");
     card.style.opacity = "0.6";
-
     const showError = (msg) => {
       console.error("Basemap load failed:", msg);
-      card.style.opacity = "1";
-      card.classList.remove("active");
+      card.style.opacity = "1"; card.classList.remove("active");
       const errDiv = document.createElement("div");
       errDiv.style.cssText = "position:absolute;inset:0;background:rgba(193,18,31,.85);color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;padding:4px;text-align:center;border-radius:4px;pointer-events:none;";
-      errDiv.textContent = "Failed to load";
-      card.style.position = "relative";
-      card.appendChild(errDiv);
-      setTimeout(() => errDiv.remove(), 2500);
+      errDiv.textContent = "Failed to load"; card.style.position = "relative";
+      card.appendChild(errDiv); setTimeout(() => errDiv.remove(), 2500);
     };
-
-    // Fetch the item's /data endpoint which contains the web map JSON including
-    // baseMapLayers. This works for any Web Map item regardless of how it was saved.
-    const token = IdentityManager.credentials.length > 0
-      ? IdentityManager.credentials[0].token : "";
-    const dataUrl = `${CONFIG.portalUrl}/sharing/rest/content/items/${item.id}/data?f=json` +
-      (token ? `&token=${token}` : "");
-
-    fetch(dataUrl)
-      .then(r => r.json())
-      .then(data => {
-        const layerDefs = data.baseMap && data.baseMap.baseMapLayers;
-        if (!layerDefs || layerDefs.length === 0) throw new Error("No baseMapLayers in item data");
-
-        const baseLayers = layerDefs.map(def => {
-          const url = def.url || def.styleUrl || "";
-          if (!url) return null;
-          const opacity = def.opacity != null ? def.opacity : 1;
-          const title   = def.title || item.title;
-          const type    = (def.layerType || def.type || "").toLowerCase();
-
-          // Vector tile layer
-          if (type === "vectortilelayer" || url.includes("/VectorTileServer")) {
-            return new VectorTileLayer({ url, title, opacity });
-          }
-          // XYZ / WMTS tile URL template (contains {z}, {level}, {col}, {row})
-          if (/\{[zZlevel]/.test(url) || /\{[rowcol]/.test(url)) {
-            return new WebTileLayer({ urlTemplate: url, title, opacity });
-          }
-          // ArcGIS REST tile service (MapServer / ImageServer / TileServer)
-          return new TileLayer({ url, title, opacity });
-        }).filter(Boolean);
-
-        if (baseLayers.length === 0) throw new Error("Could not build any layers");
-
-        const newBasemap = new Basemap({ baseLayers, title: item.title });
-        return newBasemap.load().then(() => {
-          view.map.basemap = newBasemap;
-          card.style.opacity = "1";
-        });
-      })
-      .catch(err => {
-        // Final fallback: portalItem constructor
-        const bm = new Basemap({ portalItem: new PortalItem({ id: item.id, portal: _portal }) });
-        bm.load()
-          .then(() => { view.map.basemap = bm; card.style.opacity = "1"; })
-          .catch(() => showError(err));
-      });
+    try {
+      const [layMods, bmMods] = await Promise.all([loadLayerMods(), loadBasemapMods()]);
+      const WTL = layMods.WebTileLayer, TL = layMods.TileLayer, VTL = layMods.VectorTileLayer;
+      const BM = bmMods.Basemap, PI = bmMods.PortalItem;
+      const token = IdentityManager.credentials.length > 0 ? IdentityManager.credentials[0].token : "";
+      const dataUrl = CONFIG.portalUrl + "/sharing/rest/content/items/" + item.id + "/data?f=json" + (token ? "&token=" + token : "");
+      const data = await fetch(dataUrl).then(r => r.json());
+      const layerDefs = data.baseMap && data.baseMap.baseMapLayers;
+      if (!layerDefs || layerDefs.length === 0) throw new Error("No baseMapLayers");
+      const XYZ_RE = /\{(z|level|row|col)\}/i;
+      const baseLayers = layerDefs.map(def => {
+        const url = def.url || def.styleUrl || "";
+        if (!url) return null;
+        const opacity = def.opacity != null ? def.opacity : 1;
+        const title = def.title || item.title;
+        const type = (def.layerType || def.type || "").toLowerCase();
+        if (type === "vectortilelayer" || url.includes("/VectorTileServer")) return new VTL({ url, title, opacity });
+        if (XYZ_RE.test(url)) return new WTL({ urlTemplate: url, title, opacity });
+        return new TL({ url, title, opacity });
+      }).filter(Boolean);
+      if (baseLayers.length === 0) throw new Error("Could not build any layers");
+      const newBasemap = new BM({ baseLayers, title: item.title });
+      await newBasemap.load();
+      view.map.basemap = newBasemap;
+      card.style.opacity = "1";
+    } catch (err) {
+      try {
+        const mods = await loadBasemapMods();
+        const bm = new mods.Basemap({ portalItem: new mods.PortalItem({ id: item.id, portal: _portal }) });
+        await bm.load();
+        view.map.basemap = bm; card.style.opacity = "1";
+      } catch (err2) { showError(err2); }
+    }
   }
+
 
 }); // end require
 </script>

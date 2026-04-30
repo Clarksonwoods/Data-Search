@@ -5249,6 +5249,7 @@ require([
     view.container.addEventListener("contextmenu", async function(e) {
       e.preventDefault();
       e.stopPropagation();
+      _suppressNextClick = true; // suppress the click event that browsers fire after contextmenu
 
       const popup = document.getElementById("locationPopup");
       const body  = document.getElementById("locationPopupBody");
@@ -5363,14 +5364,18 @@ require([
 
   // Left-click: if it hits a pin — reopen the popup for that pin.
   // Otherwise close the popup.
+  // Guard: suppress the click that browsers fire immediately after contextmenu.
+  let _suppressNextClick = false;
+
   view.when(() => {
     view.on("click", async function(event) {
+      if (_suppressNextClick) { _suppressNextClick = false; return; }
+
       // Hit-test against the pin layer only
       const { results } = await view.hitTest(event, { include: [pinLayer] });
       const pinHit = results.find(r => r.graphic && r.graphic.attributes && r.graphic.attributes._pinNum != null);
 
       if (pinHit) {
-        // Find stored pin data
         const pinNum = pinHit.graphic.attributes._pinNum;
         const pin    = _pinData.find(p => p.num === pinNum);
         if (!pin) return;

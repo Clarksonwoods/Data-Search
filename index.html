@@ -5817,13 +5817,15 @@ require([
     return hmAllLayers().find(l => l.id === id);
   }
 
-  function hmMakeTileLayer(def) {
-    return L.tileLayer(def.url, {
+  function hmMakeTileLayer(def, pane) {
+    const opts = {
       attribution: def.attr,
       maxZoom: def.maxZ,
       minZoom: def.minZ || 1,
       maxNativeZoom: def.maxZ,
-    });
+    };
+    if (pane) opts.pane = pane;
+    return L.tileLayer(def.url, opts);
   }
 
   function hmCheckZoom() {
@@ -5959,8 +5961,12 @@ require([
         this._setClip(this._right, clipR);
       },
       _setClip: function(layer, clip) {
-        if (!layer || !layer.getContainer) return;
-        const el = layer.getContainer();
+        if (!layer) return;
+        // Use the pane element if the layer was added to a named pane
+        const paneName = layer.options && layer.options.pane;
+        const el = paneName && this._map
+          ? this._map.getPane(paneName)
+          : (layer.getContainer && layer.getContainer());
         if (el) el.style.clip = clip;
       }
     });
@@ -5969,6 +5975,10 @@ require([
 
   window.openHistoricMaps = async function() {
     const overlay = document.getElementById("historicMapsOverlay");
+    // Position overlay flush below the app header so the banner remains visible
+    const headerEl = document.querySelector("header");
+    const headerBottom = headerEl ? (headerEl.getBoundingClientRect().bottom) : 0;
+    overlay.style.top = headerBottom + "px";
     overlay.style.display = "flex";
     document.getElementById("historicMapsBtn").classList.add("active");
 
@@ -6013,11 +6023,17 @@ require([
     // Crosshair cursor style
     container.style.cursor = "crosshair";
 
-    // Build tile layers
+    // Create dedicated panes so each layer clips independently
+    _hmMap.createPane("hmLeft");
+    _hmMap.createPane("hmRight");
+    _hmMap.getPane("hmLeft").style.zIndex  = 200;
+    _hmMap.getPane("hmRight").style.zIndex = 201;
+
+    // Build tile layers in their dedicated panes
     const lDef = hmGetDef("left");
     const rDef = hmGetDef("right");
-    _hmLeftLayer  = hmMakeTileLayer(lDef).addTo(_hmMap);
-    _hmRightLayer = hmMakeTileLayer(rDef).addTo(_hmMap);
+    _hmLeftLayer  = hmMakeTileLayer(lDef, "hmLeft").addTo(_hmMap);
+    _hmRightLayer = hmMakeTileLayer(rDef, "hmRight").addTo(_hmMap);
 
     _hmControl = makeSBS(_hmLeftLayer, _hmRightLayer);
     if (_hmControl) _hmControl.addTo(_hmMap);
@@ -6025,6 +6041,30 @@ require([
     // Zoom warning
     _hmMap.on("zoomend", hmCheckZoom);
     hmCheckZoom();
+
+    // Shared crosshair cursor — one SVG cross that follows the mouse over both sides
+    const crosshair = document.createElement("div");
+    crosshair.id = "hmCrosshair";
+    Object.assign(crosshair.style, {
+      position: "absolute", pointerEvents: "none", zIndex: "900",
+      width: "20px", height: "20px", transform: "translate(-50%,-50%)",
+      display: "none",
+    });
+    crosshair.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <line x1="10" y1="0" x2="10" y2="20" stroke="white" stroke-width="2"/>
+      <line x1="0" y1="10" x2="20" y2="10" stroke="white" stroke-width="2"/>
+      <line x1="10" y1="0" x2="10" y2="20" stroke="#222" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="0" y1="10" x2="20" y2="10" stroke="#222" stroke-width="1" stroke-dasharray="3,3"/>
+    </svg>`;
+    container.appendChild(crosshair);
+
+    container.addEventListener("mousemove", e => {
+      const rect = container.getBoundingClientRect();
+      crosshair.style.left = (e.clientX - rect.left) + "px";
+      crosshair.style.top  = (e.clientY - rect.top)  + "px";
+      crosshair.style.display = "block";
+    });
+    container.addEventListener("mouseleave", () => { crosshair.style.display = "none"; });
 
     updateHMAttribution();
   };
@@ -6037,9 +6077,10 @@ require([
 
   window.updateHistoricLayer = function(side) {
     if (!_hmMap) return;
-    const def = hmGetDef(side);
+    const def  = hmGetDef(side);
     if (!def) return;
-    const newLayer = hmMakeTileLayer(def).addTo(_hmMap);
+    const pane = side === "left" ? "hmLeft" : "hmRight";
+    const newLayer = hmMakeTileLayer(def, pane).addTo(_hmMap);
     if (side === "left") {
       if (_hmLeftLayer) _hmMap.removeLayer(_hmLeftLayer);
       _hmLeftLayer = newLayer;
@@ -6070,7 +6111,7 @@ require([
 }); // end require
 </script>
 <!-- ── Historic Maps Side-by-Side Comparison ──────────────────────────────── -->
-<div id="historicMapsOverlay" style="display:none;position:fixed;inset:0;z-index:9500;flex-direction:column;">
+<div id="historicMapsOverlay" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:9500;flex-direction:column;">
   <!-- Floating control bar — matches app button style -->
   <div id="hmControlBar" style="
     position:absolute;top:12px;left:50%;transform:translateX(-50%);

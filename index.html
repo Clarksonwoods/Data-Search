@@ -5800,30 +5800,118 @@ require([
       css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
       document.head.appendChild(css);
 
-      // Temporarily suppress Dojo's AMD define so Leaflet registers as a global
-      let _amd;
-      if (typeof define === "function" && define.amd) {
-        _amd = define.amd;
-        define.amd = undefined;
-      }
+      // Completely neutralise AMD so neither Leaflet nor the plugin get captured by Dojo
+      const savedDefine = window.define;
+      const savedRequire = window.require;
+      window.define  = undefined;
+      window.require = undefined;
+
       const restore = () => {
-        if (_amd !== undefined && typeof define === "function") define.amd = _amd;
+        window.define  = savedDefine;
+        window.require = savedRequire;
       };
 
       const loadScript = (src) => new Promise((res, rej) => {
         const s = document.createElement("script");
         s.src = src;
         s.onload  = res;
-        s.onerror = rej;
+        s.onerror = () => rej(new Error("Failed to load: " + src));
         document.head.appendChild(s);
       });
 
-      // Load Leaflet first, then side-by-side plugin sequentially
       loadScript("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js")
-        .then(() => loadScript("https://cdn.jsdelivr.net/npm/leaflet-side-by-side@2.1.0/index.min.js"))
+        .then(() => loadScript("https://unpkg.com/leaflet-side-by-side@2.1.0/index.js"))
         .then(() => { restore(); _hmLoaded = true; resolve(); })
-        .catch((e) => { restore(); reject(e); });
+        .catch(() => {
+          // Side-by-side CDN failed — restore AMD and use our inlined implementation
+          restore();
+          inlineSideBySide();
+          _hmLoaded = true;
+          resolve();
+        });
     });
+  }
+
+  // Minimal inline side-by-side plugin — no external dependency
+  function inlineSideBySide() {
+    if (!window.L || (L.control && L.control.sideBySide)) return;
+    L.Control.SideBySide = L.Control.extend({
+      options: { thumbSize: 42, padding: 0 },
+      initialize: function(left, right, options) {
+        this._left  = left;
+        this._right = right;
+        L.setOptions(this, options);
+      },
+      getPosition: function() { return this._position; },
+      setPosition: function(x) {
+        this._position = x;
+        if (this._map) this._updateClip();
+      },
+      addTo: function(map) {
+        this._map = map;
+        this._position = map.getSize().x / 2;
+        this._divider = L.DomUtil.create("div", "sbs-divider", map.getContainer());
+        Object.assign(this._divider.style, {
+          position: "absolute", top: "0", bottom: "0", width: "3px",
+          background: "#fff", cursor: "col-resize", zIndex: "800",
+          left: this._position + "px", boxShadow: "0 0 6px rgba(0,0,0,.4)"
+        });
+        this._thumb = L.DomUtil.create("div", "sbs-thumb", this._divider);
+        Object.assign(this._thumb.style, {
+          position: "absolute", top: "50%", left: "50%",
+          transform: "translate(-50%,-50%)", width: "40px", height: "40px",
+          background: "#fff", borderRadius: "50%", boxShadow: "0 0 6px rgba(0,0,0,.4)",
+          cursor: "col-resize", display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: "18px", userSelect: "none"
+        });
+        this._thumb.textContent = "⇔";
+        this._updateClip();
+        L.DomEvent.on(this._divider, "mousedown touchstart", this._onDragStart, this);
+        map.on("move resize", this._updateClip, this);
+        return this;
+      },
+      remove: function() {
+        if (this._map) {
+          this._map.off("move resize", this._updateClip, this);
+          if (this._divider) this._divider.remove();
+        }
+      },
+      _onDragStart: function(e) {
+        L.DomEvent.preventDefault(e);
+        L.DomEvent.on(document, "mousemove touchmove", this._onDrag, this);
+        L.DomEvent.on(document, "mouseup touchend",   this._onDragEnd, this);
+      },
+      _onDrag: function(e) {
+        const rect = this._map.getContainer().getBoundingClientRect();
+        const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+        this._position = Math.max(0, Math.min(x, this._map.getSize().x));
+        this._divider.style.left = this._position + "px";
+        this._updateClip();
+      },
+      _onDragEnd: function() {
+        L.DomEvent.off(document, "mousemove touchmove", this._onDrag, this);
+        L.DomEvent.off(document, "mouseup touchend",   this._onDragEnd, this);
+      },
+      _updateClip: function() {
+        const map  = this._map;
+        const size = map.getSize();
+        const pos  = this._position;
+        if (this._divider) this._divider.style.left = pos + "px";
+        const nw   = map.containerPointToLayerPoint([0, 0]);
+        const se   = map.containerPointToLayerPoint(size);
+        const mid  = map.containerPointToLayerPoint([pos, 0]);
+        const clipL = `rect(${nw.y}px, ${mid.x}px, ${se.y}px, ${nw.x}px)`;
+        const clipR = `rect(${nw.y}px, ${se.x}px, ${se.y}px, ${mid.x}px)`;
+        this._setClip(this._left,  clipL);
+        this._setClip(this._right, clipR);
+      },
+      _setClip: function(layer, clip) {
+        if (!layer || !layer.getContainer) return;
+        const el = layer.getContainer();
+        if (el) el.style.clip = clip;
+      }
+    });
+    L.control.sideBySide = (l, r, opts) => new L.Control.SideBySide(l, r, opts);
   }
 
   window.openHistoricMaps = async function() {
@@ -5840,6 +5928,9 @@ require([
         `<div style="color:#f88;padding:20px;font-family:Georgia,serif;">Failed to load Leaflet: ${e}</div>`;
       return;
     }
+
+    // Ensure side-by-side is available (inline fallback if CDN plugin didn't attach)
+    inlineSideBySide();
 
     // Destroy old map if it exists
     if (_hmMap) { _hmMap.remove(); _hmMap = null; _hmControl = null; }

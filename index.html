@@ -628,6 +628,100 @@
     #layerToggleBtn:hover { border-color: var(--green-mid); color: var(--green-dark); }
     #layerToggleBtn.active { background: var(--green-dark); color: #fff; border-color: var(--green-dark); }
 
+    /* ── Basemap toggle button ──────────────────────────────────── */
+    #basemapToggleBtn {
+      position: absolute;
+      top: 52px; right: 12px;
+      z-index: 10;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 12px;
+      font-family: 'Georgia', serif;
+      color: var(--ink-mid);
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: border-color .15s;
+    }
+    #basemapToggleBtn:hover { border-color: var(--green-mid); color: var(--green-dark); }
+    #basemapToggleBtn.active { background: var(--green-dark); color: #fff; border-color: var(--green-dark); }
+
+    /* ── Basemap panel drawer ───────────────────────────────────── */
+    #basemapPanel {
+      position: absolute;
+      top: 0; right: 0;
+      width: 260px;
+      height: 100%;
+      background: var(--surface);
+      border-left: 1px solid var(--line);
+      box-shadow: -4px 0 16px rgba(0,0,0,.08);
+      display: flex;
+      flex-direction: column;
+      z-index: 8;
+      transform: translateX(100%);
+      transition: transform .22s ease;
+    }
+    #basemapPanel.open { transform: translateX(0); }
+    .bm-header {
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .bm-close { background: none; border: none; cursor: pointer; color: var(--ink-faint); font-size: 16px; line-height: 1; padding: 0 2px; }
+    .bm-close:hover { color: var(--ink); }
+    .bm-body {
+      overflow-y: auto; flex: 1;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      align-content: start;
+    }
+    .bm-body::-webkit-scrollbar { width: 4px; }
+    .bm-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+    .bm-card {
+      border: 2px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      cursor: pointer;
+      transition: all .15s;
+      background: var(--bg);
+    }
+    .bm-card:hover { border-color: var(--green-bright); box-shadow: 0 2px 8px rgba(82,183,136,.25); }
+    .bm-card.active { border-color: var(--green-dark); box-shadow: 0 0 0 1px var(--green-dark); }
+    .bm-thumb {
+      width: 100%; aspect-ratio: 4/3;
+      object-fit: cover;
+      display: block;
+      background: #dde;
+    }
+    .bm-thumb-placeholder {
+      width: 100%; aspect-ratio: 4/3;
+      background: linear-gradient(135deg, #c9dece 0%, #e8f5ec 100%);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+    }
+    .bm-label {
+      font-size: 10px;
+      color: var(--ink-mid);
+      padding: 4px 6px 5px;
+      text-align: center;
+      line-height: 1.3;
+      font-family: 'Georgia', serif;
+    }
+
     /* ── Layer panel drawer ─────────────────────────────────────── */
     #layerPanel {
       position: absolute;
@@ -659,6 +753,22 @@
     }
     .lp-close { background: none; border: none; cursor: pointer; color: var(--ink-faint); font-size: 16px; line-height: 1; padding: 0 2px; }
     .lp-close:hover { color: var(--ink); }
+    /* All on/off toolbar */
+    .lp-toolbar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 14px;
+      border-bottom: 1px solid var(--line);
+      flex-shrink: 0;
+    }
+    .lp-toolbar-label { font-size: 10px; color: var(--ink-faint); flex: 1; }
+    .lp-toggle-btn {
+      font-size: 10px; font-family: 'Georgia', serif;
+      padding: 2px 9px; border-radius: 3px; cursor: pointer;
+      border: 1px solid var(--line); background: var(--bg); color: var(--ink-mid);
+      transition: all .1s;
+    }
+    .lp-toggle-btn:hover { background: var(--green-pale); border-color: var(--green-bright); color: var(--green-dark); }
+    .lp-toggle-btn.active { background: var(--green-dark); border-color: var(--green-dark); color: #fff; }
     .lp-body { overflow-y: auto; flex: 1; padding: 8px 0; }
     .lp-body::-webkit-scrollbar { width: 4px; }
     .lp-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
@@ -851,6 +961,19 @@
               Priority / Red-listed
             </label>
           </div>
+          <!-- Location resolution filter -->
+          <div style="display:flex;flex-direction:column;gap:3px;padding:5px 7px;background:var(--bg);border:1px solid var(--line);border-radius:4px;">
+            <div style="font-size:10px;font-weight:bold;color:var(--ink-faint);margin-bottom:2px;text-transform:uppercase;letter-spacing:.06em;">Location precision</div>
+            <select id="filterResolution" onchange="applyRecordFilters()"
+              style="width:100%;padding:3px 6px;border:1px solid var(--line);border-radius:4px;font-size:11px;font-family:'Georgia',serif;background:var(--surface);">
+              <option value="0">All precisions</option>
+              <option value="10">10 m or better (10-figure)</option>
+              <option value="100">100 m or better (8-figure+)</option>
+              <option value="1000">1 km or better (6-figure+)</option>
+              <option value="10000">10 km or better (4-figure+)</option>
+            </select>
+            <div id="filterResolutionHint" style="font-size:9px;color:var(--ink-faint);font-style:italic;"></div>
+          </div>
           <div style="font-size:10px;color:var(--ink-faint);text-align:right;" id="recordCount"></div>
         </div>
       </div>
@@ -911,14 +1034,39 @@
       Layers
     </button>
 
+    <!-- Basemap toggle button -->
+    <button id="basemapToggleBtn" onclick="toggleBasemapPanel()">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="1" y="1" width="12" height="12" rx="1"/>
+        <path d="M1 5h12M5 5v8"/>
+      </svg>
+      Basemap
+    </button>
+
     <!-- Layer panel drawer -->
     <div id="layerPanel">
       <div class="lp-header">
         <span>Map Layers</span>
         <button class="lp-close" onclick="toggleLayerPanel()">&#x2715;</button>
       </div>
+      <div class="lp-toolbar">
+        <span class="lp-toolbar-label">Toggle all</span>
+        <button class="lp-toggle-btn" id="lpBtnAllOn"  onclick="setAllLayersVisible(true)">All on</button>
+        <button class="lp-toggle-btn" id="lpBtnAllOff" onclick="setAllLayersVisible(false)">All off</button>
+      </div>
       <div class="lp-body" id="layerPanelBody">
         <div style="padding:14px;font-size:11px;color:var(--ink-faint)">Loading layers…</div>
+      </div>
+    </div>
+
+    <!-- Basemap panel drawer -->
+    <div id="basemapPanel">
+      <div class="bm-header">
+        <span>Basemaps</span>
+        <button class="bm-close" onclick="toggleBasemapPanel()">&#x2715;</button>
+      </div>
+      <div class="bm-body" id="basemapBody">
+        <div style="grid-column:1/-1;padding:8px;font-size:11px;color:var(--ink-faint)">Loading basemaps…</div>
       </div>
     </div>
   </div>
@@ -942,6 +1090,8 @@ require([
   "esri/layers/GraphicsLayer",
   "esri/layers/WebTileLayer",
   "esri/Basemap",
+  "esri/portal/Portal",
+  "esri/portal/PortalItem",
   "esri/widgets/Sketch/SketchViewModel",
 ], function(
   Map, MapView, WebMap,
@@ -950,6 +1100,7 @@ require([
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager,
   GraphicsLayer, WebTileLayer, Basemap,
+  Portal, PortalItem,
   SketchViewModel
 ) {
 
@@ -1539,9 +1690,12 @@ require([
   // Layers hidden on load to avoid unnecessary tile/feature requests.
   // Revealed when a boundary is drawn/selected or a user manually enables one.
 
-  // Titles of layers that should always stay visible (red line boundary layer)
+  // Titles of layers that should always stay visible (red line boundary, tile/basemap layers)
   function isAlwaysVisible(layer) {
-    return CONFIG.redLineTitlePattern.test(layer.title || "");
+    if (CONFIG.redLineTitlePattern.test(layer.title || "")) return true;
+    // Keep tile-type layers (OSM, WMTS, web-tile, vector-tile) visible — they are basemap-like
+    const alwaysTypes = ["tile", "open-street-map", "web-tile", "vector-tile", "wmts"];
+    return alwaysTypes.includes(layer.type);
   }
 
   // Returns true if this layer or any descendant matches the always-visible pattern
@@ -1585,12 +1739,43 @@ require([
     buildLayerPanel();
   }
 
+  // ── All layers on / off ───────────────────────────────────────────────────
+  window.setAllLayersVisible = function(visible) {
+    // When turning on, also mark as revealed so hideDesignationLayers doesn't re-hide them
+    if (visible) _designationLayersRevealed = true;
+
+    webMap.layers.forEach(layer => setLayerTreeVisible(layer, visible));
+    // Also toggle the GraphicsLayers we added (import layers) if they exist
+    if (typeof importLayer          !== "undefined") importLayer.visible          = visible;
+    if (typeof importProtectedLayer !== "undefined") importProtectedLayer.visible = visible;
+
+    buildLayerPanel();
+    updateAllOnOffButtons();
+  };
+
+  function updateAllOnOffButtons() {
+    const layers = webMap.layers.toArray();
+    const controllable = layers.filter(l => !isAlwaysVisible(l));
+    const anyOn  = controllable.some(l => l.visible);
+    const allOff = controllable.every(l => !l.visible);
+    const btnOn  = document.getElementById("lpBtnAllOn");
+    const btnOff = document.getElementById("lpBtnAllOff");
+    if (btnOn)  btnOn.classList.toggle("active",  anyOn && !allOff);
+    if (btnOff) btnOff.classList.toggle("active",  allOff);
+  }
+
   // ── Layer panel ───────────────────────────────────────────────────────────
   window.toggleLayerPanel = function() {
     const panel = document.getElementById("layerPanel");
     const btn   = document.getElementById("layerToggleBtn");
-    panel.classList.toggle("open");
-    btn.classList.toggle("active");
+    const isOpen = panel.classList.toggle("open");
+    btn.classList.toggle("active", isOpen);
+
+    // Close basemap panel if open
+    if (isOpen) {
+      document.getElementById("basemapPanel").classList.remove("open");
+      document.getElementById("basemapToggleBtn").classList.remove("active");
+    }
   };
 
   function buildLayerPanel() {
@@ -1600,6 +1785,7 @@ require([
     // Render layers in reverse so top layers appear first (matches map draw order)
     const allLayers = webMap.layers.toArray().slice().reverse();
     allLayers.forEach(layer => renderLayerRow(layer, body, 0));
+    updateAllOnOffButtons();
   }
 
   function renderLayerRow(layer, container, depth) {
@@ -1671,7 +1857,6 @@ require([
       check.className = "lp-layer-check";
       check.checked = layer.visible;
       check.addEventListener("change", () => {
-        if (check.checked) revealDesignationLayers(); // user opted in — show everything
         layer.visible = check.checked;
       });
 
@@ -3426,6 +3611,8 @@ require([
       const filterPriority = document.getElementById("filterPriority");
       if (filterLegal)    filterLegal.checked = false;
       if (filterPriority) filterPriority.checked = false;
+      const filterRes = document.getElementById("filterResolution");
+      if (filterRes) filterRes.value = "0";
       document.getElementById("btnDrawLabel").textContent = "Draw red line boundary";
       document.getElementById("btnRun").disabled = true;
       document.getElementById("btnRunLabel").textContent = "Run Desk Study";
@@ -3713,15 +3900,42 @@ require([
 
     for (const row of _importRows) {
       let latLng = null;
+      let gridRef = "", easting = null, northing = null, precisionM = 1;
       try {
         if (locType === "bng") {
-          latLng = bngToLatLng(row[colLoc1]);
+          const raw = (row[colLoc1] || "").trim().toUpperCase().replace(/\s+/g, "");
+          gridRef = raw;
+          latLng = bngToLatLng(raw);
+          // Precision from digit count: half digits → factor
+          const digits = raw.slice(2);
+          const half = Math.floor(digits.length / 2);
+          precisionM = half > 0 ? Math.pow(10, 5 - half) : 10000;
+          // Derive easting/northing from lat/lng (centroid) for display
+          if (latLng) {
+            const en = latLngToEN(latLng.lat, latLng.lng);
+            easting  = Math.round(en.E);
+            northing = Math.round(en.N);
+          }
         } else if (locType === "latlng") {
           const lat = parseFloat(row[colLoc1]);
           const lng = parseFloat(row[colLoc2]);
-          if (!isNaN(lat) && !isNaN(lng)) latLng = { lat, lng };
+          if (!isNaN(lat) && !isNaN(lng)) {
+            latLng = { lat, lng };
+            precisionM = 1;
+            const en = latLngToEN(lat, lng);
+            easting  = Math.round(en.E);
+            northing = Math.round(en.N);
+            const { E: gE, N: gN } = en;
+            gridRef  = enToBNG(gE, gN, 5); // 10-fig from lat/lng
+          }
         } else { // xy
-          latLng = xyToLatLng(row[colLoc1], row[colLoc2]);
+          const ex = parseFloat(row[colLoc1]);
+          const nx = parseFloat(row[colLoc2]);
+          latLng = xyToLatLng(ex, nx);
+          precisionM = 1;
+          easting  = Math.round(ex);
+          northing = Math.round(nx);
+          if (latLng) gridRef = enToBNG(ex, nx, 5);
         }
       } catch(e) {}
 
@@ -3732,11 +3946,24 @@ require([
       const taxonGroup  = colTaxonGroup ? (row[colTaxonGroup] || "").trim() : "";
       const date        = colDate       ? (row[colDate]       || "").trim() : "";
       const label       = common || scientific || "Record";
+
+      // Precision label for display and filtering
+      const precisionLabel = precisionM >= 10000 ? "10 km (4-figure)"
+        : precisionM >= 1000  ? "1 km (6-figure)"
+        : precisionM >= 100   ? "100 m (8-figure)"
+        : precisionM >= 10    ? "10 m (10-figure)"
+        : "1 m";
+
       // Extra columns: everything except the mapped ones
       const mappedCols = new Set([colSci, colCommon, colTaxonGroup, colDate, colLoc1, colLoc2].filter(Boolean));
       const extraCols  = _importCols.filter(c => !mappedCols.has(c));
 
-      records.push({ lat: latLng.lat, lng: latLng.lng, scientific, common, taxonGroup, date, label, row, _allCols: extraCols });
+      records.push({
+        lat: latLng.lat, lng: latLng.lng,
+        scientific, common, taxonGroup, date, label,
+        gridRef, easting, northing, precisionM, precisionLabel,
+        row, _allCols: extraCols,
+      });
       ok++;
     }
 
@@ -3851,16 +4078,32 @@ require([
       const hasStatus   = isProtected || isPriority;
 
       const fieldInfos = [
-        { fieldName: "scientific",  label: "Scientific name" },
-        { fieldName: "common",      label: "Common name" },
-        { fieldName: "taxonGroup",  label: "Taxon group" },
-        { fieldName: "date",        label: "Date" },
-        { fieldName: "_status",     label: "Conservation status" },
+        { fieldName: "scientific",      label: "Scientific name" },
+        { fieldName: "common",          label: "Common name" },
+        { fieldName: "taxonGroup",      label: "Taxon group" },
+        { fieldName: "date",            label: "Date" },
+        { fieldName: "_status",         label: "Conservation status" },
+        { fieldName: "_gridRef",        label: "Grid reference" },
+        { fieldName: "_easting",        label: "Easting (BNG)" },
+        { fieldName: "_northing",       label: "Northing (BNG)" },
+        { fieldName: "_lat",            label: "Latitude" },
+        { fieldName: "_lng",            label: "Longitude" },
+        { fieldName: "_precision",      label: "Location precision" },
       ];
       (rec._allCols || []).forEach(k => fieldInfos.push({ fieldName: `_col_${k}`, label: k }));
 
       const statusStr = rec._jnccMatch ? rec._jnccMatch.designations.join("; ") : "No designated status";
-      const attrs = { scientific: rec.scientific, common: rec.common, taxonGroup: rec.taxonGroup || "", date: rec.date, label: rec.label, _status: statusStr };
+      const attrs = {
+        scientific: rec.scientific, common: rec.common,
+        taxonGroup: rec.taxonGroup || "", date: rec.date, label: rec.label,
+        _status:    statusStr,
+        _gridRef:   rec.gridRef   || "",
+        _easting:   rec.easting   != null ? rec.easting.toString()  : "",
+        _northing:  rec.northing  != null ? rec.northing.toString() : "",
+        _lat:       rec.lat.toFixed(6),
+        _lng:       rec.lng.toFixed(6),
+        _precision: rec.precisionLabel || "",
+      };
       (rec._allCols || []).forEach(k => { attrs[`_col_${k}`] = rec.row[k]; });
 
       const popupTemplate = { title: "{label}", content: [{ type: "fields", fieldInfos }] };
@@ -4047,6 +4290,18 @@ require([
     const dateTo         = document.getElementById("filterDateTo").value;
     const filterLegal    = document.getElementById("filterLegal")?.checked;
     const filterPriority = document.getElementById("filterPriority")?.checked;
+    const maxPrecision   = parseInt(document.getElementById("filterResolution")?.value || "0");
+
+    // Update the resolution hint
+    const hint = document.getElementById("filterResolutionHint");
+    if (hint && maxPrecision > 0) {
+      const excluded = _allImportRecords.filter(r => r.precisionM > maxPrecision).length;
+      hint.textContent = excluded > 0
+        ? `${excluded} record${excluded !== 1 ? "s" : ""} excluded (imprecise location)`
+        : "All records meet this precision";
+    } else if (hint) {
+      hint.textContent = "";
+    }
 
     const filtered = _allImportRecords.filter(rec => {
       if (taxonFilter && !rec.scientific.toLowerCase().includes(taxonFilter) &&
@@ -4056,6 +4311,7 @@ require([
       if (dateTo   && rec.date && rec.date > dateTo)   return false;
       if (filterLegal    && !rec._isLegallyProtected) return false;
       if (filterPriority && !rec._isPriority)         return false;
+      if (maxPrecision > 0 && rec.precisionM > maxPrecision) return false;
       return true;
     });
 
@@ -4658,7 +4914,7 @@ require([
       {
         icon: "🏔️",
         label: "Geograph",
-        url: `https://www.geograph.org.uk/nearest.php?e=${Math.round(E)}&n=${Math.round(N)}`,
+        url: `https://www.geograph.org.uk/mapper/combined.php#${zoom}/${latS}/${lngS}`,
       },
       {
         icon: "☁️",
@@ -4796,6 +5052,134 @@ require([
     view.container.addEventListener("click", () => closeLocationPopup());
   });
   document.addEventListener("keydown", e => { if (e.key === "Escape") closeLocationPopup(); });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ██  BASEMAP GALLERY
+  // ══════════════════════════════════════════════════════════════════════════
+
+  let _basemapGalleryLoaded = false;
+  let _activeBasemapId = null;  // portal item ID of the currently applied basemap
+
+  window.toggleBasemapPanel = function() {
+    const panel = document.getElementById("basemapPanel");
+    const btn   = document.getElementById("basemapToggleBtn");
+    const isOpen = panel.classList.toggle("open");
+    btn.classList.toggle("active", isOpen);
+
+    // Close the layers panel if it's open
+    if (isOpen) {
+      document.getElementById("layerPanel").classList.remove("open");
+      document.getElementById("layerToggleBtn").classList.remove("active");
+    }
+
+    // Load basemaps the first time the panel is opened
+    if (isOpen && !_basemapGalleryLoaded) {
+      loadBasemapGallery();
+    }
+  };
+
+  async function loadBasemapGallery() {
+    const body = document.getElementById("basemapBody");
+    body.innerHTML = `<div style="grid-column:1/-1;padding:8px;font-size:11px;color:var(--ink-faint)">Loading basemaps…</div>`;
+
+    try {
+      const portal = new Portal({ url: CONFIG.portalUrl });
+      await portal.load();
+
+      // Query for basemap gallery group items
+      const groups = portal.basemapGalleryGroupQuery
+        ? await portal.queryGroups({ query: portal.basemapGalleryGroupQuery, num: 1 })
+        : null;
+
+      let items = [];
+
+      if (groups && groups.results && groups.results.length > 0) {
+        // Fetch items from the basemap gallery group
+        const grpItems = await groups.results[0].queryItems({ num: 40 });
+        items = grpItems.results;
+      }
+
+      // Fallback: query the portal for basemap items owned by Esri or the org
+      if (items.length === 0) {
+        const res = await portal.queryItems({
+          query: 'type:"Web Map" tags:"basemap" (owner:esri OR orgid:' + (portal.id || "") + ')',
+          num: 24,
+          sortField: "title",
+        });
+        items = res.results;
+      }
+
+      if (items.length === 0) {
+        body.innerHTML = `<div style="grid-column:1/-1;padding:8px;font-size:11px;color:var(--ink-faint)">No basemaps found. Check portal configuration.</div>`;
+        return;
+      }
+
+      _basemapGalleryLoaded = true;
+      renderBasemapCards(items, body);
+
+    } catch(e) {
+      console.error("Basemap gallery load failed:", e);
+      body.innerHTML = `<div style="grid-column:1/-1;padding:8px;font-size:11px;color:#c00;">Failed to load basemaps: ${e.message || e}</div>`;
+    }
+  }
+
+  function renderBasemapCards(items, body) {
+    body.innerHTML = "";
+
+    items.forEach(item => {
+      const card = document.createElement("div");
+      card.className = "bm-card" + (item.id === _activeBasemapId ? " active" : "");
+      card.title = item.title;
+      card.dataset.itemId = item.id;
+
+      // Thumbnail
+      const thumbUrl = item.thumbnailUrl
+        ? item.thumbnailUrl + (item.thumbnailUrl.includes("?") ? "&" : "?") + "w=200"
+        : null;
+
+      if (thumbUrl) {
+        const img = document.createElement("img");
+        img.className = "bm-thumb";
+        img.src = thumbUrl;
+        img.alt = item.title;
+        img.onerror = () => {
+          img.replaceWith(makePlaceholder());
+        };
+        card.appendChild(img);
+      } else {
+        card.appendChild(makePlaceholder());
+      }
+
+      const lbl = document.createElement("div");
+      lbl.className = "bm-label";
+      lbl.textContent = item.title;
+      card.appendChild(lbl);
+
+      card.addEventListener("click", () => applyBasemap(item, card));
+      body.appendChild(card);
+    });
+  }
+
+  function makePlaceholder() {
+    const div = document.createElement("div");
+    div.className = "bm-thumb-placeholder";
+    div.textContent = "🗺️";
+    return div;
+  }
+
+  function applyBasemap(item, card) {
+    _activeBasemapId = item.id;
+
+    // Update active highlight
+    document.querySelectorAll(".bm-card").forEach(c => c.classList.remove("active"));
+    card.classList.add("active");
+
+    // Apply basemap to the map
+    const newBasemap = new Basemap({
+      portalItem: new PortalItem({ id: item.id, portal: { url: CONFIG.portalUrl } }),
+    });
+    view.map.basemap = newBasemap;
+  }
 
 }); // end require
 </script>

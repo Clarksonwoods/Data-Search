@@ -5032,32 +5032,41 @@ require([
         y: e.clientY - rect.top,
       };
 
-      // Sanity-check the point is inside the container
       if (screenPoint.x < 0 || screenPoint.y < 0 ||
           screenPoint.x > rect.width || screenPoint.y > rect.height) {
         body.innerHTML = `<div class="loc-loading">Click was outside the map area.</div>`;
         return;
       }
 
-      let mp = view.toMap(screenPoint);
+      const mp = view.toMap(screenPoint);
       if (!mp) {
         body.innerHTML = `<div class="loc-loading">Could not determine map location.</div>`;
         return;
       }
 
-      // Project to geographic if the map is in a projected coordinate system
-      if (mp.spatialReference && !mp.spatialReference.isGeographic) {
-        try {
-          mp = webMercatorUtils.webMercatorToGeographic(mp);
-        } catch(projErr) {
-          // Not web mercator — can't project; fall back to raw values
-        }
+      let lat, lng;
+      const wkid = mp.spatialReference && (mp.spatialReference.wkid || mp.spatialReference.latestWkid);
+
+      if (mp.latitude != null && isFinite(mp.latitude) &&
+          mp.latitude >= -90 && mp.latitude <= 90 &&
+          mp.longitude != null && isFinite(mp.longitude)) {
+        // Already geographic
+        lat = mp.latitude;
+        lng = mp.longitude;
+      } else if (wkid === 27700 || wkid === 7405) {
+        // British National Grid → WGS84 using our existing inverse transform
+        const geo = enToLatLng(mp.x, mp.y);
+        lat = geo.lat;
+        lng = geo.lng;
+      } else {
+        // Assume Web Mercator (3857 / 102100) — inverse Mercator formula
+        const R = 6378137;
+        lng = (mp.x / R) * (180 / Math.PI);
+        lat = (2 * Math.atan(Math.exp(mp.y / R)) - Math.PI / 2) * (180 / Math.PI);
       }
 
-      const lat = mp.latitude  != null ? mp.latitude  : mp.y;
-      const lng = mp.longitude != null ? mp.longitude : mp.x;
-
-      if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) {
+      if (!isFinite(lat) || !isFinite(lng) ||
+          lat < -90 || lat > 90 || lng < -180 || lng > 180) {
         body.innerHTML = `<div class="loc-loading">Could not determine map location.</div>`;
         return;
       }
@@ -5263,7 +5272,6 @@ require([
   function applyBasemap(item, card) {
     _activeBasemapId = item.id;
 
-    // Visual feedback
     document.querySelectorAll(".bm-card").forEach(c => {
       c.classList.remove("active");
       c.style.opacity = "1";
@@ -5283,33 +5291,45 @@ require([
       setTimeout(() => errDiv.remove(), 2500);
     };
 
-    // Strategy 1: load as a WebMap and extract its .basemap
-    // This works for Web Map items saved as basemaps in AGOL (the most common case)
-    const wm = new WebMap({
-      portalItem: new PortalItem({
-        id: item.id,
-        portal: _portal,
-      }),
-    });
+    // Fetch the item's /data endpoint which contains the web map JSON including
+    // baseMapLayers. This works for any Web Map item regardless of how it was saved.
+    const token = IdentityManager.credentials.length > 0
+      ? IdentityManager.credentials[0].token : "";
+    const dataUrl = `${CONFIG.portalUrl}/sharing/rest/content/items/${item.id}/data?f=json` +
+      (token ? `&token=${token}` : "");
 
-    wm.load()
-      .then(() => {
-        if (wm.basemap) {
-          return wm.basemap.load().then(() => {
-            view.map.basemap = wm.basemap;
-            card.style.opacity = "1";
-          });
-        }
-        // Strategy 2: item is a proper Basemap item — construct directly
-        const bm = new Basemap({
-          portalItem: new PortalItem({ id: item.id, portal: _portal }),
-        });
-        return bm.load().then(() => {
-          view.map.basemap = bm;
+    fetch(dataUrl)
+      .then(r => r.json())
+      .then(data => {
+        const layers = data.baseMap && data.baseMap.baseMapLayers;
+        if (!layers || layers.length === 0) throw new Error("No baseMapLayers in item data");
+
+        // Build ArcGIS layer objects from the layer definitions
+        const builtLayers = layers.map(layerDef => {
+          // Each layer def has url, type, layerType, id, opacity, visibility etc.
+          const url = layerDef.url || layerDef.styleUrl;
+          if (!url) return null;
+          // Use WebTileLayer for tile URL templates, otherwise TileLayer-like via Basemap
+          return { url, title: layerDef.title || item.title, opacity: layerDef.opacity != null ? layerDef.opacity : 1 };
+        }).filter(Boolean);
+
+        if (builtLayers.length === 0) throw new Error("Could not build any layers from item data");
+
+        // Construct Basemap with WebTileLayer(s)
+        const bmLayers = builtLayers.map(l => new WebTileLayer({ urlTemplate: l.url, title: l.title, opacity: l.opacity }));
+        const newBasemap = new Basemap({ baseLayers: bmLayers, title: item.title });
+        newBasemap.load().then(() => {
+          view.map.basemap = newBasemap;
           card.style.opacity = "1";
-        });
+        }).catch(showError);
       })
-      .catch(err => showError(err));
+      .catch(err => {
+        // Final fallback: try Basemap portalItem directly
+        const bm = new Basemap({ portalItem: new PortalItem({ id: item.id, portal: _portal }) });
+        bm.load()
+          .then(() => { view.map.basemap = bm; card.style.opacity = "1"; })
+          .catch(() => showError(err));
+      });
   }
 
 }); // end require

@@ -1147,7 +1147,8 @@ require([
   let _layerMods = null;
   function loadLayerMods() {
     if (!_layerMods) _layerMods = new Promise(res =>
-      require(["esri/layers/WebTileLayer","esri/layers/TileLayer","esri/layers/VectorTileLayer"], (WTL,TL,VTL) => res({WebTileLayer:WTL,TileLayer:TL,VectorTileLayer:VTL})));
+      require(["esri/layers/WebTileLayer","esri/layers/TileLayer","esri/layers/VectorTileLayer","esri/layers/ImageryTileLayer"],
+        (WTL,TL,VTL,ITL) => res({WebTileLayer:WTL, TileLayer:TL, VectorTileLayer:VTL, ImageryTileLayer:ITL})));
     return _layerMods;
   }
 
@@ -5613,6 +5614,7 @@ require([
     document.querySelectorAll(".bm-card").forEach(c => { c.classList.remove("active"); c.style.opacity = "1"; });
     card.classList.add("active");
     card.style.opacity = "0.6";
+
     const showError = (msg) => {
       console.error("Basemap load failed:", msg);
       card.style.opacity = "1"; card.classList.remove("active");
@@ -5621,38 +5623,91 @@ require([
       errDiv.textContent = "Failed to load"; card.style.position = "relative";
       card.appendChild(errDiv); setTimeout(() => errDiv.remove(), 2500);
     };
+
     try {
       const [layMods, bmMods] = await Promise.all([loadLayerMods(), loadBasemapMods()]);
-      const WTL = layMods.WebTileLayer, TL = layMods.TileLayer, VTL = layMods.VectorTileLayer;
-      const BM = bmMods.Basemap, PI = bmMods.PortalItem;
+      const { WebTileLayer: WTL, TileLayer: TL, VectorTileLayer: VTL, ImageryTileLayer: ITL } = layMods;
+      const { Basemap: BM, PortalItem: PI } = bmMods;
       const token = IdentityManager.credentials.length > 0 ? IdentityManager.credentials[0].token : "";
-      const dataUrl = CONFIG.portalUrl + "/sharing/rest/content/items/" + item.id + "/data?f=json" + (token ? "&token=" + token : "");
-      const data = await fetch(dataUrl).then(r => r.json());
-      const layerDefs = data.baseMap && data.baseMap.baseMapLayers;
-      if (!layerDefs || layerDefs.length === 0) throw new Error("No baseMapLayers");
-      const XYZ_RE = /\{(z|level|row|col)\}/i;
-      const baseLayers = layerDefs.map(def => {
-        const url = def.url || def.styleUrl || "";
-        if (!url) return null;
-        const opacity = def.opacity != null ? def.opacity : 1;
-        const title = def.title || item.title;
-        const type = (def.layerType || def.type || "").toLowerCase();
-        if (type === "vectortilelayer" || url.includes("/VectorTileServer")) return new VTL({ url, title, opacity });
-        if (XYZ_RE.test(url)) return new WTL({ urlTemplate: url, title, opacity });
-        return new TL({ url, title, opacity });
-      }).filter(Boolean);
-      if (baseLayers.length === 0) throw new Error("Could not build any layers");
-      const newBasemap = new BM({ baseLayers, title: item.title });
-      await newBasemap.load();
-      view.map.basemap = newBasemap;
-      card.style.opacity = "1";
-    } catch (err) {
-      try {
-        const mods = await loadBasemapMods();
-        const bm = new mods.Basemap({ portalItem: new mods.PortalItem({ id: item.id, portal: _portal }) });
+      const auth  = token ? "&token=" + token : "";
+      const base  = CONFIG.portalUrl + "/sharing/rest/content/items/" + item.id;
+
+      // Step 1: fetch item metadata to determine the item type
+      const meta = await fetch(base + "?f=json" + auth).then(r => r.json());
+      const itemType = (meta.type || "").toLowerCase();
+
+      // Step 2: route by type
+      // ── Map Service / Image Service / Vector Tile Service ────────────────
+      // These items ARE the layer — wrap directly in a Basemap
+      if (itemType.includes("map service") || itemType.includes("image service") ||
+          itemType.includes("tiled map service")) {
+        const layer = itemType.includes("vector tile")
+          ? new VTL({ url: meta.url, title: item.title })
+          : itemType.includes("image")
+            ? new ITL({ url: meta.url, title: item.title })
+            : new TL({ url: meta.url, title: item.title });
+        const bm = new BM({ baseLayers: [layer], title: item.title });
         await bm.load();
-        view.map.basemap = bm; card.style.opacity = "1";
-      } catch (err2) { showError(err2); }
+        view.map.basemap = bm;
+        card.style.opacity = "1";
+        return;
+      }
+
+      // ── Vector Tile Style item ────────────────────────────────────────────
+      if (itemType.includes("vector tile")) {
+        const layer = new VTL({ portalItem: new PI({ id: item.id, portal: _portal }) });
+        const bm = new BM({ baseLayers: [layer], title: item.title });
+        await bm.load();
+        view.map.basemap = bm;
+        card.style.opacity = "1";
+        return;
+      }
+
+      // ── Web Map — try /data for baseMapLayers ─────────────────────────────
+      if (itemType.includes("web map") || itemType === "") {
+        const data = await fetch(base + "/data?f=json" + auth).then(r => r.json());
+
+        if (data && data.baseMap && data.baseMap.baseMapLayers && data.baseMap.baseMapLayers.length > 0) {
+          // Has explicit baseMapLayers definition
+          const XYZ_RE = /\{(z|level|row|col)\}/i;
+          const baseLayers = data.baseMap.baseMapLayers.map(def => {
+            const url = def.url || def.styleUrl || "";
+            if (!url) return null;
+            const opacity = def.opacity != null ? def.opacity : 1;
+            const title   = def.title || item.title;
+            const type    = (def.layerType || def.type || "").toLowerCase();
+            if (type === "vectortilelayer" || url.includes("/VectorTileServer"))
+              return new VTL({ url, title, opacity });
+            if (XYZ_RE.test(url))
+              return new WTL({ urlTemplate: url, title, opacity });
+            if (type.includes("image") || url.includes("/ImageServer"))
+              return new ITL({ url, title, opacity });
+            return new TL({ url, title, opacity });
+          }).filter(Boolean);
+
+          if (baseLayers.length > 0) {
+            const bm = new BM({ baseLayers, title: item.title });
+            await bm.load();
+            view.map.basemap = bm;
+            card.style.opacity = "1";
+            return;
+          }
+        }
+
+        // /data returned null or empty — this is a basemap-type web map item
+        // Use the portalItem constructor which handles native Basemap items
+        // by reading from the item's basemap JSON directly
+        const bm = new BM({ portalItem: new PI({ id: item.id, portal: _portal }) });
+        await bm.load();
+        view.map.basemap = bm;
+        card.style.opacity = "1";
+        return;
+      }
+
+      throw new Error("Unrecognised item type: " + itemType);
+
+    } catch (err) {
+      showError(err);
     }
   }
 

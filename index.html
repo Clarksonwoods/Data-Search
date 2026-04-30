@@ -6042,29 +6042,22 @@ require([
     _hmMap.on("zoomend", hmCheckZoom);
     hmCheckZoom();
 
-    // Shared crosshair cursor — one SVG cross that follows the mouse over both sides
-    const crosshair = document.createElement("div");
-    crosshair.id = "hmCrosshair";
-    Object.assign(crosshair.style, {
-      position: "absolute", pointerEvents: "none", zIndex: "900",
-      width: "20px", height: "20px", transform: "translate(-50%,-50%)",
-      display: "none",
-    });
-    crosshair.innerHTML = `<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <line x1="10" y1="0" x2="10" y2="20" stroke="white" stroke-width="2"/>
-      <line x1="0" y1="10" x2="20" y2="10" stroke="white" stroke-width="2"/>
-      <line x1="10" y1="0" x2="10" y2="20" stroke="#222" stroke-width="1" stroke-dasharray="3,3"/>
-      <line x1="0" y1="10" x2="20" y2="10" stroke="#222" stroke-width="1" stroke-dasharray="3,3"/>
-    </svg>`;
-    container.appendChild(crosshair);
+    // Full-span crosshair hairlines — horizontal and vertical lines across the whole map
+    // Both lines together mark the same geographic point on both sides of the divider
+    const chH = document.getElementById("hmCrosshairH");
+    const chV = document.getElementById("hmCrosshairV");
 
     container.addEventListener("mousemove", e => {
       const rect = container.getBoundingClientRect();
-      crosshair.style.left = (e.clientX - rect.left) + "px";
-      crosshair.style.top  = (e.clientY - rect.top)  + "px";
-      crosshair.style.display = "block";
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      if (chH) { chH.style.top = y + "px"; chH.style.display = "block"; }
+      if (chV) { chV.style.left = x + "px"; chV.style.display = "block"; }
     });
-    container.addEventListener("mouseleave", () => { crosshair.style.display = "none"; });
+    container.addEventListener("mouseleave", () => {
+      if (chH) chH.style.display = "none";
+      if (chV) chV.style.display = "none";
+    });
 
     updateHMAttribution();
   };
@@ -6072,6 +6065,10 @@ require([
   window.closeHistoricMaps = function() {
     document.getElementById("historicMapsOverlay").style.display = "none";
     document.getElementById("historicMapsBtn").classList.remove("active");
+    const chH = document.getElementById("hmCrosshairH");
+    const chV = document.getElementById("hmCrosshairV");
+    if (chH) chH.style.display = "none";
+    if (chV) chV.style.display = "none";
     if (_hmMap) { _hmMap.remove(); _hmMap = null; _hmControl = null; }
   };
 
@@ -6142,6 +6139,9 @@ require([
   ">⚠ Zoom in too far for this map layer — tiles not available at this zoom level</div>
   <!-- Attribution -->
   <div id="hmAttribution" style="position:absolute;bottom:0;right:0;z-index:1000;font-size:9px;color:#fff;background:rgba(0,0,0,.5);padding:2px 8px;font-family:sans-serif;max-width:60%;text-align:right;"></div>
+  <!-- Crosshair cursor overlay — two hairlines that follow the mouse -->
+  <div id="hmCrosshairH" style="display:none;position:absolute;left:0;right:0;height:1px;background:rgba(255,80,0,.7);pointer-events:none;z-index:900;box-shadow:0 0 3px rgba(0,0,0,.4);"></div>
+  <div id="hmCrosshairV" style="display:none;position:absolute;top:0;bottom:0;width:1px;background:rgba(255,80,0,.7);pointer-events:none;z-index:900;box-shadow:0 0 3px rgba(0,0,0,.4);"></div>
   <!-- Leaflet map container — full screen -->
   <div id="hmMapContainer" style="width:100%;height:100%;"></div>
 </div>

@@ -5784,11 +5784,14 @@ require([
     return fn(left, right);
   }
 
-  let _hmMap = null;         // Leaflet map instance
+  let _hmMapL    = null;  // left Leaflet map
+  let _hmMapR    = null;  // right Leaflet map
+  let _hmMap     = null;  // alias kept for hmCheckZoom compat (points to left)
   let _hmLeftLayer  = null;
   let _hmRightLayer = null;
-  let _hmControl    = null;  // side-by-side control
+  let _hmControl    = null;  // unused in two-map mode, kept for safety
   let _hmLoaded     = false; // Leaflet scripts loaded?
+  let _hmChVMirror  = null;  // second vertical hairline for mirror cursor
 
   function hmAllLayers() {
     return [...HM_LAYERS.modern, ...HM_LAYERS.satellite, ...HM_LAYERS.historic];
@@ -5829,8 +5832,8 @@ require([
   }
 
   function hmCheckZoom() {
-    if (!_hmMap) return;
-    const z   = _hmMap.getZoom();
+    if (!_hmMapL) return;
+    const z   = _hmMapL.getZoom();
     const lDef = hmGetDef("left");
     const rDef = hmGetDef("right");
     const warn = document.getElementById("hmZoomWarn");
@@ -5995,8 +5998,9 @@ require([
     // Ensure side-by-side is available (inline fallback if CDN plugin didn't attach)
     inlineSideBySide();
 
-    // Destroy old map if it exists
-    if (_hmMap) { _hmMap.remove(); _hmMap = null; _hmControl = null; }
+    // Destroy old maps if they exist
+    if (_hmMapL) { _hmMapL.remove(); _hmMapL = null; }
+    if (_hmMapR) { _hmMapR.remove(); _hmMapR = null; }
 
     // Get current ArcGIS view centre & zoom, convert from BNG to WGS84
     let lat = 51.5, lng = -1.5, zoom = 12;
@@ -6017,47 +6021,79 @@ require([
     // Give the DOM a tick to render before initialising Leaflet
     await new Promise(r => setTimeout(r, 80));
 
-    const container = document.getElementById("hmMapContainer");
-    _hmMap = L.map(container, { zoomControl: true, cursor: true }).setView([lat, lng], zoom);
+    // Two separate Leaflet maps — kept in perfect sync so both always show the same location
+    const cL = document.getElementById("hmMapLeft");
+    const cR = document.getElementById("hmMapRight");
+    cL.style.cursor = "crosshair";
+    cR.style.cursor = "crosshair";
 
-    // Crosshair cursor style
-    container.style.cursor = "crosshair";
+    const opts = { zoomControl: false, attributionControl: false };
+    _hmMapL = L.map(cL, opts).setView([lat, lng], zoom);
+    _hmMapR = L.map(cR, opts).setView([lat, lng], zoom);
+    L.control.zoom({ position: "topleft" }).addTo(_hmMapL);
 
-    // Create dedicated panes so each layer clips independently
-    _hmMap.createPane("hmLeft");
-    _hmMap.createPane("hmRight");
-    _hmMap.getPane("hmLeft").style.zIndex  = 200;
-    _hmMap.getPane("hmRight").style.zIndex = 201;
-
-    // Build tile layers in their dedicated panes
     const lDef = hmGetDef("left");
     const rDef = hmGetDef("right");
-    _hmLeftLayer  = hmMakeTileLayer(lDef, "hmLeft").addTo(_hmMap);
-    _hmRightLayer = hmMakeTileLayer(rDef, "hmRight").addTo(_hmMap);
+    _hmLeftLayer  = hmMakeTileLayer(lDef).addTo(_hmMapL);
+    _hmRightLayer = hmMakeTileLayer(rDef).addTo(_hmMapR);
 
-    _hmControl = makeSBS(_hmLeftLayer, _hmRightLayer);
-    if (_hmControl) _hmControl.addTo(_hmMap);
+    // Sync: when either map moves, update the other without triggering a loop
+    let _syncing = false;
+    function syncMaps(source, target) {
+      source.on("move", () => {
+        if (_syncing) return;
+        _syncing = true;
+        target.setView(source.getCenter(), source.getZoom(), { animate: false });
+        _syncing = false;
+      });
+    }
+    syncMaps(_hmMapL, _hmMapR);
+    syncMaps(_hmMapR, _hmMapL);
 
-    // Zoom warning
-    _hmMap.on("zoomend", hmCheckZoom);
+    // Zoom warning — check both maps
+    _hmMapL.on("zoomend", hmCheckZoom);
+    _hmMapR.on("zoomend", hmCheckZoom);
     hmCheckZoom();
 
-    // Full-span crosshair hairlines — horizontal and vertical lines across the whole map
-    // Both lines together mark the same geographic point on both sides of the divider
+    // Crosshair hairlines — mirror mouse position across both map panels
     const chH = document.getElementById("hmCrosshairH");
     const chV = document.getElementById("hmCrosshairV");
+    _hmChVMirror = document.getElementById("hmCrosshairVMirror");
+    const wrapper = document.getElementById("hmMapsWrapper");
 
-    container.addEventListener("mousemove", e => {
-      const rect = container.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      if (chH) { chH.style.top = y + "px"; chH.style.display = "block"; }
-      if (chV) { chV.style.left = x + "px"; chV.style.display = "block"; }
-    });
-    container.addEventListener("mouseleave", () => {
+    function showHairlines(e) {
+      const wRect = wrapper.getBoundingClientRect();
+      const x = e.clientX - wRect.left;
+      const y = e.clientY - wRect.top;
+      // Mirror on both panels: show V-line at % of left panel, and same % offset in right panel
+      const lRect = cL.getBoundingClientRect();
+      const rRect = cR.getBoundingClientRect();
+      if (chH) { chH.style.top = (e.clientY - wRect.top) + "px"; chH.style.display = "block"; }
+      if (chV) {
+        // Position the vertical hairline in screen coords relative to wrapper
+        // For left panel hover: also show mirror on right panel
+        if (e.clientX >= lRect.left && e.clientX <= lRect.right) {
+          // Hovering left panel — show hairline and mirror on right at same relative x%
+          const pct = (e.clientX - lRect.left) / lRect.width;
+          const mirrorX = rRect.left + pct * rRect.width - wRect.left;
+          // Use a second vertical div for the mirror
+          chV.style.left = (e.clientX - wRect.left) + "px"; chV.style.display = "block";
+          if (_hmChVMirror) { _hmChVMirror.style.left = mirrorX + "px"; _hmChVMirror.style.display = "block"; }
+        } else {
+          const pct = (e.clientX - rRect.left) / rRect.width;
+          const mirrorX = lRect.left + pct * lRect.width - wRect.left;
+          chV.style.left = (e.clientX - wRect.left) + "px"; chV.style.display = "block";
+          if (_hmChVMirror) { _hmChVMirror.style.left = mirrorX + "px"; _hmChVMirror.style.display = "block"; }
+        }
+      }
+    }
+    function hideHairlines() {
       if (chH) chH.style.display = "none";
       if (chV) chV.style.display = "none";
-    });
+      if (_hmChVMirror) _hmChVMirror.style.display = "none";
+    }
+    wrapper.addEventListener("mousemove", showHairlines);
+    wrapper.addEventListener("mouseleave", hideHairlines);
 
     updateHMAttribution();
   };
@@ -6065,30 +6101,26 @@ require([
   window.closeHistoricMaps = function() {
     document.getElementById("historicMapsOverlay").style.display = "none";
     document.getElementById("historicMapsBtn").classList.remove("active");
-    const chH = document.getElementById("hmCrosshairH");
-    const chV = document.getElementById("hmCrosshairV");
-    if (chH) chH.style.display = "none";
-    if (chV) chV.style.display = "none";
-    if (_hmMap) { _hmMap.remove(); _hmMap = null; _hmControl = null; }
+    ["hmCrosshairH","hmCrosshairV","hmCrosshairVMirror"].forEach(id => {
+      const el = document.getElementById(id); if (el) el.style.display = "none";
+    });
+    if (_hmMapL) { _hmMapL.remove(); _hmMapL = null; }
+    if (_hmMapR) { _hmMapR.remove(); _hmMapR = null; }
+    _hmMap = null; _hmControl = null;
   };
 
   window.updateHistoricLayer = function(side) {
-    if (!_hmMap) return;
-    const def  = hmGetDef(side);
+    const mapInst = side === "left" ? _hmMapL : _hmMapR;
+    if (!mapInst) return;
+    const def = hmGetDef(side);
     if (!def) return;
-    const pane = side === "left" ? "hmLeft" : "hmRight";
-    const newLayer = hmMakeTileLayer(def, pane).addTo(_hmMap);
+    const newLayer = hmMakeTileLayer(def).addTo(mapInst);
     if (side === "left") {
-      if (_hmLeftLayer) _hmMap.removeLayer(_hmLeftLayer);
+      if (_hmLeftLayer)  mapInst.removeLayer(_hmLeftLayer);
       _hmLeftLayer = newLayer;
     } else {
-      if (_hmRightLayer) _hmMap.removeLayer(_hmRightLayer);
+      if (_hmRightLayer) mapInst.removeLayer(_hmRightLayer);
       _hmRightLayer = newLayer;
-    }
-    if (_hmControl) {
-      _hmMap.removeControl(_hmControl);
-      _hmControl = makeSBS(_hmLeftLayer, _hmRightLayer);
-      if (_hmControl) _hmControl.addTo(_hmMap);
     }
     hmCheckZoom();
     updateHMAttribution();
@@ -6142,8 +6174,12 @@ require([
   <!-- Crosshair cursor overlay — two hairlines that follow the mouse -->
   <div id="hmCrosshairH" style="display:none;position:absolute;left:0;right:0;height:1px;background:rgba(255,80,0,.7);pointer-events:none;z-index:900;box-shadow:0 0 3px rgba(0,0,0,.4);"></div>
   <div id="hmCrosshairV" style="display:none;position:absolute;top:0;bottom:0;width:1px;background:rgba(255,80,0,.7);pointer-events:none;z-index:900;box-shadow:0 0 3px rgba(0,0,0,.4);"></div>
-  <!-- Leaflet map container — full screen -->
-  <div id="hmMapContainer" style="width:100%;height:100%;"></div>
+  <div id="hmCrosshairVMirror" style="display:none;position:absolute;top:0;bottom:0;width:1px;background:rgba(255,80,0,.4);pointer-events:none;z-index:900;border-left:1px dashed rgba(255,80,0,.8);"></div>
+  <!-- Two side-by-side map containers — synchronised to same centre/zoom -->
+  <div id="hmMapsWrapper" style="width:100%;height:100%;display:flex;">
+    <div id="hmMapLeft"  style="flex:1;height:100%;position:relative;"></div>
+    <div id="hmMapRight" style="flex:1;height:100%;position:relative;border-left:2px solid rgba(255,255,255,.6);"></div>
+  </div>
 </div>
 
 <!-- ── Location Info Popup (right-click) ─────────────────────────────── -->

@@ -1513,7 +1513,44 @@ require([
   view.when(() => {
     buildLayerPanel();
     buildBufferGroups();
+    hideDesignationLayers();   // performance: hide everything except basemap + RLB on load
   });
+
+  // ── Lazy layer visibility ─────────────────────────────────────────────────
+  // Layers hidden on load to avoid unnecessary tile/feature requests.
+  // Revealed when a boundary is drawn/selected or a user manually enables one.
+
+  // Titles of layers that should always stay visible (red line boundary layer)
+  function isAlwaysVisible(layer) {
+    return CONFIG.redLineTitlePattern.test(layer.title || "");
+  }
+
+  // Walk a layer tree and set visibility, skipping always-visible layers
+  function setLayerTreeVisible(layer, visible) {
+    if (isAlwaysVisible(layer)) return;
+    layer.visible = visible;
+    if (layer.layers) layer.layers.forEach(child => setLayerTreeVisible(child, visible));
+  }
+
+  let _designationLayersRevealed = false;
+
+  function hideDesignationLayers() {
+    if (_designationLayersRevealed) return; // user has already turned things on — don't re-hide
+    webMap.layers.forEach(layer => setLayerTreeVisible(layer, false));
+    buildLayerPanel(); // re-render checkboxes to reflect new visibility state
+  }
+
+  function revealDesignationLayers() {
+    if (_designationLayersRevealed) return; // already done
+    _designationLayersRevealed = true;
+    webMap.layers.forEach(layer => {
+      // Restore every layer to visible — the web map's original state is used.
+      // Always-visible layers were never hidden so this is safe for all.
+      layer.visible = true;
+      if (layer.layers) layer.layers.forEach(child => { child.visible = true; });
+    });
+    buildLayerPanel();
+  }
 
   // ── Layer panel ───────────────────────────────────────────────────────────
   window.toggleLayerPanel = function() {
@@ -1544,7 +1581,7 @@ require([
       row.className = "lp-group-row";
 
       const chevron = document.createElement("span");
-      chevron.className = "lp-chevron open";
+      chevron.className = "lp-chevron"; // no 'open' — collapsed by default
       chevron.textContent = "▶";
 
       const check = document.createElement("input");
@@ -1571,7 +1608,7 @@ require([
       row.appendChild(label);
 
       const children = document.createElement("div");
-      children.className = "lp-children open";
+      children.className = "lp-children"; // no 'open' — collapsed by default
 
       // Toggle expand/collapse on row click (not checkbox)
       row.addEventListener("click", e => {
@@ -1600,7 +1637,10 @@ require([
       check.type = "checkbox";
       check.className = "lp-layer-check";
       check.checked = layer.visible;
-      check.addEventListener("change", () => { layer.visible = check.checked; });
+      check.addEventListener("change", () => {
+        if (check.checked) revealDesignationLayers(); // user opted in — show everything
+        layer.visible = check.checked;
+      });
 
       // Colour swatch — try to get renderer colour
       const swatch = document.createElement("span");
@@ -1671,6 +1711,7 @@ require([
           document.getElementById("btnRun").disabled = false;
           setStatus("info", "✓ Boundary drawn — ready to run desk study.");
           view.cursor = "default";
+          revealDesignationLayers();
         }
       });
     }
@@ -1865,6 +1906,7 @@ require([
       document.getElementById("btnSelect").classList.add("selected");
       document.getElementById("btnSelectLabel").textContent = "✓ Boundary selected";
       document.getElementById("btnRun").disabled = false;
+      revealDesignationLayers();
     });
   };
 
@@ -3365,6 +3407,9 @@ require([
       document.getElementById("btnReset").style.display = "none";
       hideProgress();
       clearStatus();
+      // Re-hide designation layers so the next session starts fast
+      _designationLayersRevealed = false;
+      hideDesignationLayers();
     }
     view.cursor = "default";
     document.getElementById("selectOverlay").classList.remove("active");
@@ -4584,7 +4629,7 @@ require([
       },
       {
         icon: "☁️",
-        label: "Open­Topo",
+        label: "OpenTopo",
         url: `https://opentopomap.org/#marker=${zoom}/${latS}/${lngS}`,
       },
     ];
@@ -4598,9 +4643,11 @@ require([
 
     return `
       <hr class="loc-divider">
-      <div class="loc-links-label">Open in…</div>
+      <div class="loc-links-label">Open in...</div>
       <div class="loc-links-grid">${btns}</div>`;
   }
+
+  window.copyLocValue = function(id, btn) {
     const el = document.getElementById("locval-" + id);
     if (!el) return;
     // Strip thousand-separators for numerics before copying

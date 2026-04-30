@@ -1089,6 +1089,7 @@ require([
   "esri/WebMap",
   "esri/geometry/geometryEngineAsync",
   "esri/geometry/Extent",
+  "esri/geometry/support/webMercatorUtils",
   "esri/Graphic",
   "esri/rest/query",
   "esri/rest/support/Query",
@@ -1104,6 +1105,7 @@ require([
   Map, MapView, WebMap,
   geometryEngineAsync,
   Extent,
+  webMercatorUtils,
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager,
   GraphicsLayer, WebTileLayer, Basemap,
@@ -5020,13 +5022,11 @@ require([
       popup.style.display = "block";
       positionPopup(e.clientX, e.clientY);
 
-      // Convert screen point to map coordinates.
-      // view.toMap() expects coordinates relative to the view container element.
-      // Use pageX/pageY minus the container's page-relative offset to handle
-      // any CSS layout offsets (sidebar, scroll etc.).
+      // Convert screen point to map coordinates then to WGS84.
+      // view.toMap() returns a point in the map's spatial reference (usually
+      // Web Mercator WKID 102100/3857), not geographic. Use webMercatorUtils
+      // to project it to WGS84 so .latitude/.longitude are populated.
       const rect = view.container.getBoundingClientRect();
-      const scrollX = window.scrollX || window.pageXOffset || 0;
-      const scrollY = window.scrollY || window.pageYOffset || 0;
       const screenPoint = {
         x: e.clientX - rect.left,
         y: e.clientY - rect.top,
@@ -5039,18 +5039,27 @@ require([
         return;
       }
 
-      const mp = view.toMap(screenPoint);
-      if (!mp || mp.latitude == null || mp.longitude == null ||
-          isNaN(mp.latitude) || isNaN(mp.longitude)) {
-        // Last resort: try with raw clientX/Y in case the container is full-screen
-        const mpRaw = view.toMap({ x: e.clientX, y: e.clientY });
-        if (!mpRaw || mpRaw.latitude == null || isNaN(mpRaw.latitude)) {
-          body.innerHTML = `<div class="loc-loading">Could not determine map location.</div>`;
-          return;
+      let mp = view.toMap(screenPoint);
+      if (!mp) {
+        body.innerHTML = `<div class="loc-loading">Could not determine map location.</div>`;
+        return;
+      }
+
+      // Project to geographic if the map is in a projected coordinate system
+      if (mp.spatialReference && !mp.spatialReference.isGeographic) {
+        try {
+          mp = webMercatorUtils.webMercatorToGeographic(mp);
+        } catch(projErr) {
+          // Not web mercator — can't project; fall back to raw values
         }
-        var lat = mpRaw.latitude, lng = mpRaw.longitude;
-      } else {
-        var lat = mp.latitude, lng = mp.longitude;
+      }
+
+      const lat = mp.latitude  != null ? mp.latitude  : mp.y;
+      const lng = mp.longitude != null ? mp.longitude : mp.x;
+
+      if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) {
+        body.innerHTML = `<div class="loc-loading">Could not determine map location.</div>`;
+        return;
       }
 
       const { rows } = buildLocationRows(lat, lng);
@@ -5262,31 +5271,45 @@ require([
     card.classList.add("active");
     card.style.opacity = "0.6";
 
-    // Build basemap from portal item and load before assigning.
-    // Pass the authenticated portal instance so tokens are included.
-    const newBasemap = new Basemap({
+    const showError = (msg) => {
+      console.error("Basemap load failed:", msg);
+      card.style.opacity = "1";
+      card.classList.remove("active");
+      const errDiv = document.createElement("div");
+      errDiv.style.cssText = "position:absolute;inset:0;background:rgba(193,18,31,.85);color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;padding:4px;text-align:center;border-radius:4px;pointer-events:none;";
+      errDiv.textContent = "Failed to load";
+      card.style.position = "relative";
+      card.appendChild(errDiv);
+      setTimeout(() => errDiv.remove(), 2500);
+    };
+
+    // Strategy 1: load as a WebMap and extract its .basemap
+    // This works for Web Map items saved as basemaps in AGOL (the most common case)
+    const wm = new WebMap({
       portalItem: new PortalItem({
         id: item.id,
         portal: _portal,
       }),
     });
 
-    newBasemap.load()
+    wm.load()
       .then(() => {
-        view.map.basemap = newBasemap;
-        card.style.opacity = "1";
+        if (wm.basemap) {
+          return wm.basemap.load().then(() => {
+            view.map.basemap = wm.basemap;
+            card.style.opacity = "1";
+          });
+        }
+        // Strategy 2: item is a proper Basemap item — construct directly
+        const bm = new Basemap({
+          portalItem: new PortalItem({ id: item.id, portal: _portal }),
+        });
+        return bm.load().then(() => {
+          view.map.basemap = bm;
+          card.style.opacity = "1";
+        });
       })
-      .catch(err => {
-        console.error("Basemap load failed:", err);
-        card.style.opacity = "1";
-        card.classList.remove("active");
-        const errDiv = document.createElement("div");
-        errDiv.style.cssText = "position:absolute;inset:0;background:rgba(193,18,31,.85);color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;padding:4px;text-align:center;border-radius:4px;pointer-events:none;";
-        errDiv.textContent = "Failed to load";
-        card.style.position = "relative";
-        card.appendChild(errDiv);
-        setTimeout(() => errDiv.remove(), 2500);
-      });
+      .catch(err => showError(err));
   }
 
 }); // end require

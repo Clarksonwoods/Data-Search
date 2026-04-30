@@ -606,10 +606,10 @@
     }
     .reset-btn:hover { border-color: var(--red); color: var(--red); }
 
-    /* ── Map control buttons (top-right) ───────────────────────── */
+    /* ── Map control buttons (top-right, left of panels) ────────── */
     #mapBtnGroup {
       position: absolute;
-      top: 12px; right: 12px;
+      top: 12px; right: 272px;
       z-index: 10;
       display: flex;
       flex-direction: column;
@@ -1881,15 +1881,42 @@ require([
       row.appendChild(swatch);
       row.appendChild(label);
 
+      // Mark WMS/feature layers that fail to load (e.g. CORS-blocked) as unavailable
+      if (layer.loadStatus === "failed" || layer.loadError) {
+        markLayerUnavailable(row, check, label, layer.loadError);
+      } else if (isWms || layer.type === "feature") {
+        layer.load().catch(err => markLayerUnavailable(row, check, label, err));
+      }
+
       // Clicking the row (not checkbox) also toggles
       row.addEventListener("click", e => {
         if (e.target === check) return;
+        if (row.dataset.unavailable) return; // don't toggle broken layers
         check.checked = !check.checked;
         layer.visible = check.checked;
       });
 
       container.appendChild(row);
     }
+  }
+
+  function markLayerUnavailable(row, check, label, err) {
+    const isCors = err && (String(err.message || err).toLowerCase().includes("cors") ||
+                           String(err.message || err).includes("ERR_FAILED") ||
+                           String(err.details?.url || "").length > 0);
+    row.dataset.unavailable = "1";
+    row.style.opacity = "0.45";
+    row.title = isCors
+      ? "Unavailable: this layer's server does not allow cross-origin requests from this domain"
+      : `Failed to load: ${err?.message || err || "unknown error"}`;
+    check.disabled = true;
+    label.style.textDecoration = "line-through";
+    // Add a small warning badge
+    const badge = document.createElement("span");
+    badge.style.cssText = "margin-left:auto;font-size:9px;color:#c00;flex-shrink:0;";
+    badge.textContent = isCors ? "CORS" : "Error";
+    badge.title = row.title;
+    row.appendChild(badge);
   }
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -4835,6 +4862,7 @@ require([
 
   // ── Build popup content
   function buildLocationRows(lat, lng) {
+    if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) return { rows: [] };
     const { E, N } = latLngToEN(lat, lng);
     const gr6  = enToBNG(E, N, 3);  // 6-figure  ±100m
     const gr8  = enToBNG(E, N, 4);  // 8-figure  ±10m
@@ -4994,7 +5022,8 @@ require([
         y: e.clientY - rect.top
       };
       const mp  = view.toMap(screenPoint);
-      if (!mp) {
+      if (!mp || mp.latitude == null || mp.longitude == null ||
+          isNaN(mp.latitude) || isNaN(mp.longitude)) {
         body.innerHTML = `<div class="loc-loading">Could not determine map location.</div>`;
         return;
       }
@@ -5088,6 +5117,7 @@ require([
     try {
       const portal = new Portal({ url: CONFIG.portalUrl });
       await portal.load();
+      _portal = portal; // store for reuse in applyBasemap
 
       // Query for basemap gallery group items
       const groups = portal.basemapGalleryGroupQuery
@@ -5170,18 +5200,41 @@ require([
     return div;
   }
 
+  let _portal = null; // reuse the loaded portal instance
+
   function applyBasemap(item, card) {
     _activeBasemapId = item.id;
 
-    // Update active highlight
-    document.querySelectorAll(".bm-card").forEach(c => c.classList.remove("active"));
-    card.classList.add("active");
-
-    // Apply basemap to the map
-    const newBasemap = new Basemap({
-      portalItem: new PortalItem({ id: item.id, portal: { url: CONFIG.portalUrl } }),
+    // Update active highlight immediately for responsiveness
+    document.querySelectorAll(".bm-card").forEach(c => {
+      c.classList.remove("active");
+      c.style.opacity = "1";
     });
-    view.map.basemap = newBasemap;
+    card.classList.add("active");
+    card.style.opacity = "0.6"; // loading indicator
+
+    // Build basemap from portal item — must load() before assigning to guarantee tiles render
+    const portalItem = new PortalItem({
+      id: item.id,
+      portal: _portal || { url: CONFIG.portalUrl },
+    });
+    const newBasemap = new Basemap({ portalItem });
+
+    newBasemap.load().then(() => {
+      view.map.basemap = newBasemap;
+      card.style.opacity = "1";
+    }).catch(err => {
+      console.error("Basemap load failed:", err);
+      card.style.opacity = "1";
+      card.classList.remove("active");
+      // Show brief error on the card
+      const errDiv = document.createElement("div");
+      errDiv.style.cssText = "position:absolute;inset:0;background:rgba(193,18,31,.85);color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;padding:4px;text-align:center;border-radius:4px;";
+      errDiv.textContent = "Failed to load";
+      card.style.position = "relative";
+      card.appendChild(errDiv);
+      setTimeout(() => errDiv.remove(), 2500);
+    });
   }
 
 }); // end require

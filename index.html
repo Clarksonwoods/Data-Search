@@ -606,11 +606,17 @@
     }
     .reset-btn:hover { border-color: var(--red); color: var(--red); }
 
-    /* ── Layer panel toggle button ──────────────────────────────── */
-    #layerToggleBtn {
+    /* ── Map control buttons (top-right) ───────────────────────── */
+    #mapBtnGroup {
       position: absolute;
       top: 12px; right: 12px;
       z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    /* ── Layer panel toggle button ──────────────────────────────── */
+    #layerToggleBtn {
       background: var(--surface);
       border: 1px solid var(--line);
       border-radius: var(--radius);
@@ -630,9 +636,6 @@
 
     /* ── Basemap toggle button ──────────────────────────────────── */
     #basemapToggleBtn {
-      position: absolute;
-      top: 52px; right: 12px;
-      z-index: 10;
       background: var(--surface);
       border: 1px solid var(--line);
       border-radius: var(--radius);
@@ -1023,25 +1026,25 @@
       <div id="searchResults"></div>
     </div>
 
-    <!-- Layer panel toggle -->
-    <button id="layerToggleBtn" onclick="toggleLayerPanel()">
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
-        <rect x="1" y="1" width="5" height="5" rx="1"/>
-        <rect x="8" y="1" width="5" height="5" rx="1"/>
-        <rect x="1" y="8" width="5" height="5" rx="1"/>
-        <rect x="8" y="8" width="5" height="5" rx="1"/>
-      </svg>
-      Layers
-    </button>
-
-    <!-- Basemap toggle button -->
-    <button id="basemapToggleBtn" onclick="toggleBasemapPanel()">
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
-        <rect x="1" y="1" width="12" height="12" rx="1"/>
-        <path d="M1 5h12M5 5v8"/>
-      </svg>
-      Basemap
-    </button>
+    <!-- Map control buttons -->
+    <div id="mapBtnGroup">
+      <button id="layerToggleBtn" onclick="toggleLayerPanel()">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="1" y="1" width="5" height="5" rx="1"/>
+          <rect x="8" y="1" width="5" height="5" rx="1"/>
+          <rect x="1" y="8" width="5" height="5" rx="1"/>
+          <rect x="8" y="8" width="5" height="5" rx="1"/>
+        </svg>
+        Layers
+      </button>
+      <button id="basemapToggleBtn" onclick="toggleBasemapPanel()">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="1" y="1" width="12" height="12" rx="1"/>
+          <path d="M1 5h12M5 5v8"/>
+        </svg>
+        Basemap
+      </button>
+    </div>
 
     <!-- Layer panel drawer -->
     <div id="layerPanel">

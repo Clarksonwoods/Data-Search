@@ -364,7 +364,98 @@
     }
     .progress-label { font-size: 10px; color: var(--ink-faint); margin-top: 4px; }
 
-    /* ── Layer checklist ────────────────────────────────────────── */
+    /* ── Location info popup (right-click) ─────────────────────────── */
+    #locationPopup {
+      position: fixed;
+      z-index: 9000;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+      font-family: 'Georgia', serif;
+      font-size: 11px;
+      color: var(--ink);
+      width: 280px;
+      overflow: hidden;
+      display: none;
+      animation: locPopIn .12s ease;
+    }
+    @keyframes locPopIn {
+      from { opacity:0; transform: scale(.95) translateY(-4px); }
+      to   { opacity:1; transform: scale(1)  translateY(0); }
+    }
+    #locationPopup .loc-header {
+      background: var(--green-dark);
+      color: #fff;
+      padding: 7px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: .04em;
+    }
+    #locationPopup .loc-close {
+      background: none; border: none; color: #fff;
+      font-size: 15px; cursor: pointer; line-height: 1; padding: 0;
+      opacity: .7;
+    }
+    #locationPopup .loc-close:hover { opacity: 1; }
+    #locationPopup .loc-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+    .loc-row {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .loc-label {
+      font-size: 9px; text-transform: uppercase; letter-spacing: .07em;
+      color: var(--ink-faint); width: 68px; flex-shrink: 0;
+    }
+    .loc-value {
+      font-size: 11px; color: var(--ink); flex: 1;
+      font-family: monospace;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .loc-value.non-mono { font-family: 'Georgia', serif; font-size: 11px; }
+    .loc-copy {
+      background: none; border: 1px solid var(--line); border-radius: 3px;
+      color: var(--ink-faint); font-size: 9px; cursor: pointer;
+      padding: 1px 5px; flex-shrink: 0;
+      transition: all .1s;
+    }
+    .loc-copy:hover { background: var(--green-pale); border-color: var(--green-bright); color: var(--green-dark); }
+    .loc-copy.copied { background: var(--green-bright); border-color: var(--green-bright); color: #fff; }
+    .loc-divider { border: none; border-top: 1px solid var(--line); margin: 2px 0; }
+    .loc-loading { font-size: 10px; color: var(--ink-faint); font-style: italic; padding: 0 0 2px; }
+    .loc-links-label {
+      font-size: 9px; text-transform: uppercase; letter-spacing: .07em;
+      color: var(--ink-faint); margin-bottom: 4px;
+    }
+    .loc-links-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 4px;
+    }
+    .loc-link-btn {
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
+      padding: 5px 4px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--bg);
+      color: var(--ink-mid);
+      font-size: 9px;
+      font-family: 'Georgia', serif;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all .12s;
+      text-align: center;
+      line-height: 1.2;
+    }
+    .loc-link-btn:hover {
+      background: var(--green-pale);
+      border-color: var(--green-bright);
+      color: var(--green-dark);
+      text-decoration: none;
+    }
+    .loc-link-icon { font-size: 14px; line-height: 1; }
     .layer-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
     .layer-item {
       display: flex;
@@ -4343,8 +4434,286 @@ require([
     }
   };
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // ██  RIGHT-CLICK LOCATION INFO POPUP
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── WGS84 → OSGB36 Easting/Northing (inverse Helmert + Transverse Mercator)
+  function latLngToEN(lat, lng) {
+    // Approximate inverse Helmert WGS84 → OSGB36 (~5 m accuracy)
+    const dLat =  0.1502 + 0.2470 * (lat - 49) + 0.0916 * (lng + 2);
+    const dLon =  0.0445 - 0.0928 * (lat - 49) + 0.2029 * (lng + 2);
+    const latO = lat - dLat / 3600;
+    const lngO = lng - dLon / 3600;
+
+    const a = 6377563.396, b = 6356256.909;
+    const F0 = 0.9996012717;
+    const lat0 = 49 * Math.PI / 180, lon0 = -2 * Math.PI / 180;
+    const N0 = -100000, E0 = 400000;
+    const e2 = 1 - (b * b) / (a * a);
+    const n  = (a - b) / (a + b);
+
+    const latR = latO * Math.PI / 180;
+    const lonR = lngO * Math.PI / 180;
+    const cosL = Math.cos(latR), sinL = Math.sin(latR), tanL = Math.tan(latR);
+    const nu   = a * F0 / Math.sqrt(1 - e2 * sinL * sinL);
+    const rho  = a * F0 * (1 - e2) / Math.pow(1 - e2 * sinL * sinL, 1.5);
+    const eta2 = nu / rho - 1;
+
+    const Ma  = (1 + n + 1.25*n*n + 1.25*n*n*n) * (latR - lat0);
+    const Mb  = (3*n + 3*n*n + 2.625*n*n*n) * Math.sin(latR - lat0) * Math.cos(latR + lat0);
+    const Mc  = (1.875*n*n + 1.875*n*n*n) * Math.sin(2*(latR - lat0)) * Math.cos(2*(latR + lat0));
+    const Md  = 0.729167*n*n*n * Math.sin(3*(latR - lat0)) * Math.cos(3*(latR + lat0));
+    const M   = b * F0 * (Ma - Mb + Mc - Md);
+
+    const dL  = lonR - lon0;
+    const I   = M + N0;
+    const II  = nu / 2 * sinL * cosL;
+    const III = nu / 24 * sinL * cosL * cosL * cosL * (5 - tanL*tanL + 9*eta2);
+    const IIIa= nu / 720 * sinL * Math.pow(cosL, 5) * (61 - 58*tanL*tanL + Math.pow(tanL, 4));
+    const IV  = nu * cosL;
+    const V   = nu / 6 * cosL * cosL * cosL * (nu / rho - tanL * tanL);
+    const VI  = nu / 120 * Math.pow(cosL, 5) * (5 - 18*tanL*tanL + Math.pow(tanL, 4) + 14*eta2 - 58*tanL*tanL*eta2);
+
+    return {
+      E: E0 + IV*dL + V*Math.pow(dL, 3) + VI*Math.pow(dL, 5),
+      N: I  + II*dL*dL + III*Math.pow(dL, 4) + IIIa*Math.pow(dL, 6),
+    };
+  }
+
+  // ── Easting/Northing → BNG grid reference string (digits per half: 3/4/5)
+  function enToBNG(E, N, digits) {
+    const letters = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
+    const majorCol = Math.floor((E + 1000000) / 500000);
+    const majorRow = Math.floor((N +  500000) / 500000);
+    const l1 = letters[(4 - majorRow) * 5 + majorCol];
+    const minorCol = Math.floor(((E + 1000000) % 500000) / 100000);
+    const minorRow = Math.floor(((N +  500000) % 500000) / 100000);
+    const l2 = letters[(4 - minorRow) * 5 + minorCol];
+    const factor = Math.pow(10, 5 - digits);
+    const eStr = String(Math.floor(Math.abs(E) % 100000 / factor)).padStart(digits, "0");
+    const nStr = String(Math.floor(Math.abs(N) % 100000 / factor)).padStart(digits, "0");
+    return `${l1}${l2}${eStr}${nStr}`;
+  }
+
+  // ── Build popup content
+  function buildLocationRows(lat, lng) {
+    const { E, N } = latLngToEN(lat, lng);
+    const gr6  = enToBNG(E, N, 3);  // 6-figure  ±100m
+    const gr8  = enToBNG(E, N, 4);  // 8-figure  ±10m
+    const gr10 = enToBNG(E, N, 5);  // 10-figure ±1m
+    const easting  = Math.round(E);
+    const northing = Math.round(N);
+    const latStr = lat.toFixed(6);
+    const lngStr = lng.toFixed(6);
+
+    const rows = [
+      { label: "6-fig GR",   value: gr6,                    title: "±100 m" },
+      { label: "8-fig GR",   value: gr8,                    title: "±10 m" },
+      { label: "10-fig GR",  value: gr10,                   title: "±1 m" },
+      null, // divider
+      { label: "Easting",    value: easting.toLocaleString("en-GB") },
+      { label: "Northing",   value: northing.toLocaleString("en-GB") },
+      null,
+      { label: "Latitude",   value: latStr },
+      { label: "Longitude",  value: lngStr },
+    ];
+
+    return { rows, gr8, easting, northing, latStr, lngStr };
+  }
+
+  function renderLocationRows(rows) {
+    return rows.map(row => {
+      if (row === null) return `<hr class="loc-divider">`;
+      return `
+        <div class="loc-row">
+          <span class="loc-label" title="${row.title || ""}">${row.label}</span>
+          <span class="loc-value" id="locval-${row.label.replace(/\W/g,"")}">${row.value}</span>
+          <button class="loc-copy" onclick="copyLocValue('${row.label.replace(/\W/g,"")}', this)">copy</button>
+        </div>`;
+    }).join("");
+  }
+
+  function renderLocationLinks(lat, lng) {
+    const latS = lat.toFixed(6);
+    const lngS = lng.toFixed(6);
+    const { E, N } = latLngToEN(lat, lng);
+    const gr10 = enToBNG(E, N, 5);
+    const zoom = 17;
+
+    const links = [
+      {
+        icon: "🌍",
+        label: "Google Maps",
+        url: `https://www.google.com/maps?q=${latS},${lngS}&ll=${latS},${lngS}&z=${zoom}`,
+      },
+      {
+        icon: "📷",
+        label: "Street View",
+        url: `https://www.google.com/maps?q=&layer=c&cbll=${latS},${lngS}&cbp=12,0,,0,0`,
+      },
+      {
+        icon: "🗺️",
+        label: "Bing Maps",
+        url: `https://www.bing.com/maps?cp=${latS}~${lngS}&lvl=${zoom}&style=r`,
+      },
+      {
+        icon: "🛰️",
+        label: "Bing Aerial",
+        url: `https://www.bing.com/maps?cp=${latS}~${lngS}&lvl=${zoom}&style=h`,
+      },
+      {
+        icon: "🗾",
+        label: "OS Maps",
+        url: `https://explore.osmaps.com/pin?lat=${latS}&lon=${lngS}&zoom=${zoom}`,
+      },
+      {
+        icon: "📌",
+        label: "GR Finder",
+        url: `https://gridreferencefinder.com/#gr=${gr10}|Clicked_Point|1`,
+      },
+      {
+        icon: "🌿",
+        label: "Magic Maps",
+        url: `https://magic.defra.gov.uk/MagicMap.aspx?startTopic=Habitats%20and%20Species&activelayer=sssil&query=SRID%3D27700%3BPOINT(${Math.round(E)}%20${Math.round(N)})`,
+      },
+      {
+        icon: "🏔️",
+        label: "Geograph",
+        url: `https://www.geograph.org.uk/nearest.php?e=${Math.round(E)}&n=${Math.round(N)}`,
+      },
+      {
+        icon: "☁️",
+        label: "Open­Topo",
+        url: `https://opentopomap.org/#marker=${zoom}/${latS}/${lngS}`,
+      },
+    ];
+
+    const btns = links.map(l =>
+      `<a class="loc-link-btn" href="${l.url}" target="_blank" rel="noopener" title="${l.label}">
+        <span class="loc-link-icon">${l.icon}</span>
+        <span>${l.label}</span>
+      </a>`
+    ).join("");
+
+    return `
+      <hr class="loc-divider">
+      <div class="loc-links-label">Open in…</div>
+      <div class="loc-links-grid">${btns}</div>`;
+  }
+    const el = document.getElementById("locval-" + id);
+    if (!el) return;
+    // Strip thousand-separators for numerics before copying
+    const raw = el.textContent.replace(/,/g, "");
+    navigator.clipboard.writeText(raw).then(() => {
+      btn.textContent = "✓";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = "copy"; btn.classList.remove("copied"); }, 1400);
+    });
+  };
+
+  window.closeLocationPopup = function() {
+    document.getElementById("locationPopup").style.display = "none";
+  };
+
+  function positionPopup(screenX, screenY) {
+    const popup = document.getElementById("locationPopup");
+    popup.style.display = "block";
+    const pw = 280, ph = popup.offsetHeight || 380;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const margin = 10;
+    let left = screenX + 12;
+    let top  = screenY + 12;
+    if (left + pw > vw - margin) left = screenX - pw - 8;
+    if (top  + ph > vh - margin) top  = screenY - ph - 8;
+    left = Math.max(margin, left);
+    top  = Math.max(margin, top);
+    popup.style.left = left + "px";
+    popup.style.top  = top  + "px";
+  }
+
+  // ── Right-click handler on the map view
+  view.on("context-menu", async function(event) {
+    event.native.preventDefault();
+
+    const popup = document.getElementById("locationPopup");
+    const body  = document.getElementById("locationPopupBody");
+
+    // Show immediately with loading state
+    body.innerHTML = `<div class="loc-loading">⏳ Getting location data…</div>`;
+    popup.style.display = "block";
+    positionPopup(event.native.clientX, event.native.clientY);
+
+    // Convert map point to WGS84
+    const mp  = event.mapPoint;
+    const lat = mp.latitude;
+    const lng = mp.longitude;
+
+    const { rows } = buildLocationRows(lat, lng);
+    const { E, N } = latLngToEN(lat, lng);
+    const gr8 = enToBNG(E, N, 4);
+
+    // Render coordinate rows + external links immediately
+    body.innerHTML =
+      renderLocationRows(rows) +
+      renderLocationLinks(lat, lng) +
+      `<hr class="loc-divider">` +
+      `<div class="loc-loading" id="locAddrLine">🔍 Fetching address…</div>`;
+
+    // Re-position now content is rendered (height may have changed)
+    positionPopup(event.native.clientX, event.native.clientY);
+
+    // Async: reverse geocode via ArcGIS World Geocoding REST (no extra module needed)
+    try {
+      const gcUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode` +
+        `?location=${lng},${lat}&langCode=en&outSR=4326&f=json`;
+      const gcRes = await fetch(gcUrl);
+      const gcJson = await gcRes.json();
+      const addrEl = document.getElementById("locAddrLine");
+      if (addrEl) {
+        if (gcJson.address) {
+          const addr    = gcJson.address.Address    || "";
+          const city    = gcJson.address.City       || "";
+          const postcode= gcJson.address.Postal     || "";
+          const parts   = [addr, city, postcode].filter(Boolean).join(", ");
+          addrEl.outerHTML = `
+            <div class="loc-row">
+              <span class="loc-label">Address</span>
+              <span class="loc-value non-mono" id="locval-Address" title="${parts}" style="white-space:normal;line-height:1.3;">${parts}</span>
+              <button class="loc-copy" onclick="copyLocValue('Address',this)">copy</button>
+            </div>
+            ${postcode ? `<div class="loc-row">
+              <span class="loc-label">Postcode</span>
+              <span class="loc-value" id="locval-Postcode">${postcode}</span>
+              <button class="loc-copy" onclick="copyLocValue('Postcode',this)">copy</button>
+            </div>` : ""}`;
+        } else {
+          addrEl.textContent = "Address not available";
+        }
+      }
+    } catch(e) {
+      const addrEl = document.getElementById("locAddrLine");
+      if (addrEl) addrEl.textContent = "Address lookup failed";
+    }
+  });
+
+  // Close popup on map click or Escape
+  view.on("click", () => closeLocationPopup());
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeLocationPopup(); });
+
 }); // end require
 </script>
+<!-- ── Location Info Popup (right-click) ─────────────────────────────── -->
+<div id="locationPopup">
+  <div class="loc-header">
+    <span>📍 Location Info</span>
+    <button class="loc-close" onclick="closeLocationPopup()">✕</button>
+  </div>
+  <div class="loc-body" id="locationPopupBody">
+    <div class="loc-loading">Loading…</div>
+  </div>
+</div>
+
 <!-- ── Import Records Modal ──────────────────────────────────────────────── -->
 <div id="importModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;">
   <div style="background:#fff;border-radius:10px;width:700px;max-width:98vw;box-shadow:0 8px 32px rgba(0,0,0,.25);font-family:'Georgia',serif;margin:auto;">

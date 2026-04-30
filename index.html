@@ -5743,22 +5743,35 @@ require([
   // ══════════════════════════════════════════════════════════════════════════
 
   // NLS & free tile catalogue — all CC-BY or equivalent, no API key required
+  // minZ = first zoom level with meaningful coverage (avoids blank tiles)
+  // maxZ = highest zoom NLS confirms tiles exist
   const HM_LAYERS = {
     modern: [
-      { id: "osm",      label: "OpenStreetMap",          url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",                           attr: "© OpenStreetMap contributors", maxZ: 19 },
-      { id: "carto",    label: "CartoDB Light",           url: "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",                attr: "© CARTO, © OSM contributors",   maxZ: 19 },
-      { id: "esritopo", label: "Esri World Topo",         url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}", attr: "© Esri", maxZ: 18 },
-      { id: "esrisat",  label: "Esri Satellite",          url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",  attr: "© Esri, Maxar, Earthstar Geographics", maxZ: 18 },
+      { id: "osm",        label: "OpenStreetMap",             url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",                                         attr: "© OpenStreetMap contributors",           minZ: 1,  maxZ: 19 },
+      { id: "carto",      label: "CartoDB Light",              url: "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",                               attr: "© CARTO, © OSM contributors",             minZ: 1,  maxZ: 19 },
+      { id: "esritopo",   label: "Esri World Topo",            url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",         attr: "© Esri",                     minZ: 1,  maxZ: 18 },
+      { id: "esrisat",    label: "Esri Satellite (current)",   url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",          attr: "© Esri, Maxar",              minZ: 1,  maxZ: 18 },
+    ],
+    satellite: [
+      // Esri Wayback — archive of World Imagery snapshots going back to ~2014.
+      // The year-specific service IDs change; we use the public "living atlas" approach via a proxy layer.
+      // These are representative snapshots (not guaranteed for all areas).
+      { id: "esri2023",   label: "Esri Satellite ~2023",       url: "https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/32/{z}/{y}/{x}",  attr: "© Esri, Maxar", minZ: 1, maxZ: 18 },
+      { id: "esri2020",   label: "Esri Satellite ~2020",       url: "https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/20/{z}/{y}/{x}",  attr: "© Esri, Maxar", minZ: 1, maxZ: 18 },
+      { id: "esri2016",   label: "Esri Satellite ~2016",       url: "https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/10/{z}/{y}/{x}",  attr: "© Esri, Maxar", minZ: 1, maxZ: 18 },
+      { id: "esri2012",   label: "Esri Satellite ~2012",       url: "https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/4/{z}/{y}/{x}",   attr: "© Esri, Maxar", minZ: 1, maxZ: 18 },
     ],
     historic: [
-      { id: "nlsos1900",  label: "OS 1-inch c.1900",        url: "https://mapseries-tilesets.s3.amazonaws.com/1inch_2nd_ed/{z}/{x}/{y}.png",        attr: "NLS CC-BY", maxZ: 15 },
-      { id: "nlsos25",    label: "OS 25-inch 1892–1914",    url: "https://mapseries-tilesets.s3.amazonaws.com/25_inch/gb/{z}/{x}/{y}.png",           attr: "NLS CC-BY", maxZ: 18 },
-      { id: "nlsos6",     label: "OS 6-inch 1888–1913",     url: "https://mapseries-tilesets.s3.amazonaws.com/os/6inchfirst/{z}/{x}/{y}.png",        attr: "NLS CC-BY", maxZ: 16 },
-      { id: "nlsos10k",   label: "OS 10,560 1940s–60s",     url: "https://mapseries-tilesets.s3.amazonaws.com/os/britain10knatgrid/{z}/{x}/{y}.png", attr: "NLS CC-BY", maxZ: 16 },
-      { id: "nlsbart",    label: "Bartholomew ½-inch 1940s",url: "https://mapseries-tilesets.s3.amazonaws.com/bartholomew/{z}/{x}/{y}.png",          attr: "NLS CC-BY", maxZ: 15 },
-      { id: "nlsgsgs",    label: "GSGS 3906 1:25k 1940–43", url: "https://mapseries-tilesets.s3.amazonaws.com/gsgs3906/{z}/{x}/{y}.png",             attr: "NLS CC-BY", maxZ: 16 },
-      { id: "nlsos6eng",  label: "OS 6-inch England 1842–1952", url: "https://mapseries-tilesets.s3.amazonaws.com/os/6inch_eng/{z}/{x}/{y}.png",     attr: "NLS CC-BY", maxZ: 16 },
-      { id: "nlsos1250",  label: "OS 1:1,250 1940s–60s",    url: "https://mapseries-tilesets.s3.amazonaws.com/os/britain1250_country/{z}/{x}/{y}.png",attr: "NLS CC-BY", maxZ: 20 },
+      // NLS free tilesets — all hosted on mapseries-tilesets.s3.amazonaws.com, CC-BY NLS
+      { id: "nlsos1900",  label: "OS 1-inch 1885–1903",        url: "https://mapseries-tilesets.s3.amazonaws.com/1inch_2nd_ed/{z}/{x}/{y}.png",               attr: "NLS CC-BY",  minZ: 6,  maxZ: 15 },
+      { id: "nlsbart",    label: "Bartholomew ½-inch 1940s",   url: "https://mapseries-tilesets.s3.amazonaws.com/bartholomew/{z}/{x}/{y}.png",                attr: "NLS CC-BY",  minZ: 6,  maxZ: 15 },
+      { id: "nlsos6scot", label: "OS 6-inch Scotland 1843–82", url: "https://mapseries-tilesets.s3.amazonaws.com/os/6inchfirst/{z}/{x}/{y}.png",               attr: "NLS CC-BY",  minZ: 9,  maxZ: 16 },
+      { id: "nlsos6eng",  label: "OS 6-inch England 1842–1952",url: "https://mapseries-tilesets.s3.amazonaws.com/os/6inch_england/{z}/{x}/{y}.png",            attr: "NLS CC-BY",  minZ: 9,  maxZ: 16 },
+      { id: "nlsos25scot",label: "OS 25-inch Scotland 1892–1914",url: "https://mapseries-tilesets.s3.amazonaws.com/25_inch/scotland_1/{z}/{x}/{y}.png",         attr: "NLS CC-BY",  minZ: 12, maxZ: 18 },
+      { id: "nlsos25gb",  label: "OS 25-inch GB 1892–1914",    url: "https://mapseries-tilesets.s3.amazonaws.com/25_inch/gb/{z}/{x}/{y}.png",                  attr: "NLS CC-BY",  minZ: 12, maxZ: 18 },
+      { id: "nlsos10k",   label: "OS 1:10,560 1940s–60s",      url: "https://mapseries-tilesets.s3.amazonaws.com/os/britain10knatgrid/{z}/{x}/{y}.png",        attr: "NLS CC-BY",  minZ: 11, maxZ: 16 },
+      { id: "nlsgsgs",    label: "GSGS 3906 1:25k 1940–43",    url: "https://mapseries-tilesets.s3.amazonaws.com/gsgs3906/{z}/{x}/{y}.png",                    attr: "NLS CC-BY",  minZ: 11, maxZ: 16 },
+      { id: "nlsos1250",  label: "OS 1:1,250 National Grid",   url: "https://mapseries-tilesets.s3.amazonaws.com/os/scotland_1250_country/{z}/{x}/{y}.png",    attr: "NLS CC-BY",  minZ: 14, maxZ: 20 },
     ],
   };
 
@@ -5777,18 +5790,58 @@ require([
   let _hmControl    = null;  // side-by-side control
   let _hmLoaded     = false; // Leaflet scripts loaded?
 
-  // Populate the select dropdowns
+  function hmAllLayers() {
+    return [...HM_LAYERS.modern, ...HM_LAYERS.satellite, ...HM_LAYERS.historic];
+  }
+
+  // Populate the select dropdowns with optgroups
   function populateHMSelects() {
     const lSel = document.getElementById("hmLeftSelect");
     const rSel = document.getElementById("hmRightSelect");
-    lSel.innerHTML = HM_LAYERS.modern.map(l => `<option value="${l.id}">${l.label}</option>`).join("");
-    rSel.innerHTML = HM_LAYERS.historic.map(l => `<option value="${l.id}">${l.label}</option>`).join("");
+
+    const makeOpts = (layers) => layers.map(l => `<option value="${l.id}">${l.label}</option>`).join("");
+    const both = `
+      <optgroup label="Modern">${makeOpts(HM_LAYERS.modern)}</optgroup>
+      <optgroup label="Recent Satellite">${makeOpts(HM_LAYERS.satellite)}</optgroup>
+      <optgroup label="Historic OS (NLS)">${makeOpts(HM_LAYERS.historic)}</optgroup>`;
+    lSel.innerHTML = both;
+    rSel.innerHTML = both;
+    // Sensible defaults: left = modern OSM, right = first historic
+    lSel.value = "osm";
+    rSel.value = "nlsos1900";
   }
 
   function hmGetDef(side) {
     const sel = document.getElementById(side === "left" ? "hmLeftSelect" : "hmRightSelect");
     const id  = sel.value;
-    return [...HM_LAYERS.modern, ...HM_LAYERS.historic].find(l => l.id === id);
+    return hmAllLayers().find(l => l.id === id);
+  }
+
+  function hmMakeTileLayer(def) {
+    return L.tileLayer(def.url, {
+      attribution: def.attr,
+      maxZoom: def.maxZ,
+      minZoom: def.minZ || 1,
+      maxNativeZoom: def.maxZ,
+    });
+  }
+
+  function hmCheckZoom() {
+    if (!_hmMap) return;
+    const z   = _hmMap.getZoom();
+    const lDef = hmGetDef("left");
+    const rDef = hmGetDef("right");
+    const warn = document.getElementById("hmZoomWarn");
+    if (!warn) return;
+    const overLeft  = lDef && z > lDef.maxZ;
+    const overRight = rDef && z > rDef.maxZ;
+    if (overLeft || overRight) {
+      const names = [overLeft && lDef.label, overRight && rDef.label].filter(Boolean).join(" & ");
+      warn.textContent = `⚠ Zoomed beyond tile coverage for: ${names}`;
+      warn.style.display = "block";
+    } else {
+      warn.style.display = "none";
+    }
   }
 
   function loadLeaflet() {
@@ -5948,24 +6001,31 @@ require([
         lng = (c.x / R) * (180 / Math.PI);
         lat = (2 * Math.atan(Math.exp(c.y / R)) - Math.PI / 2) * (180 / Math.PI);
       }
-      // Approximate zoom level from ArcGIS scale
-      zoom = Math.min(17, Math.max(6, Math.round(Math.log2(591657550 / view.scale))));
+      zoom = Math.min(15, Math.max(6, Math.round(Math.log2(591657550 / view.scale))));
     } catch(e) {}
 
     // Give the DOM a tick to render before initialising Leaflet
     await new Promise(r => setTimeout(r, 80));
 
     const container = document.getElementById("hmMapContainer");
-    _hmMap = L.map(container, { zoomControl: true }).setView([lat, lng], zoom);
+    _hmMap = L.map(container, { zoomControl: true, cursor: true }).setView([lat, lng], zoom);
 
-    // Build left layer (modern)
+    // Crosshair cursor style
+    container.style.cursor = "crosshair";
+
+    // Build tile layers
     const lDef = hmGetDef("left");
     const rDef = hmGetDef("right");
-    _hmLeftLayer  = L.tileLayer(lDef.url, { attribution: lDef.attr, maxZoom: lDef.maxZ }).addTo(_hmMap);
-    _hmRightLayer = L.tileLayer(rDef.url, { attribution: rDef.attr, maxZoom: rDef.maxZ }).addTo(_hmMap);
+    _hmLeftLayer  = hmMakeTileLayer(lDef).addTo(_hmMap);
+    _hmRightLayer = hmMakeTileLayer(rDef).addTo(_hmMap);
 
     _hmControl = makeSBS(_hmLeftLayer, _hmRightLayer);
     if (_hmControl) _hmControl.addTo(_hmMap);
+
+    // Zoom warning
+    _hmMap.on("zoomend", hmCheckZoom);
+    hmCheckZoom();
+
     updateHMAttribution();
   };
 
@@ -5979,7 +6039,7 @@ require([
     if (!_hmMap) return;
     const def = hmGetDef(side);
     if (!def) return;
-    const newLayer = L.tileLayer(def.url, { attribution: def.attr, maxZoom: def.maxZ }).addTo(_hmMap);
+    const newLayer = hmMakeTileLayer(def).addTo(_hmMap);
     if (side === "left") {
       if (_hmLeftLayer) _hmMap.removeLayer(_hmLeftLayer);
       _hmLeftLayer = newLayer;
@@ -5992,6 +6052,7 @@ require([
       _hmControl = makeSBS(_hmLeftLayer, _hmRightLayer);
       if (_hmControl) _hmControl.addTo(_hmMap);
     }
+    hmCheckZoom();
     updateHMAttribution();
   };
 
@@ -5999,37 +6060,49 @@ require([
     const lDef = hmGetDef("left");
     const rDef = hmGetDef("right");
     const el = document.getElementById("hmAttribution");
-    if (el) el.textContent = `Left: ${lDef ? lDef.attr : ""} | Right: ${rDef ? rDef.attr : ""}. Historic maps © National Library of Scotland, CC-BY.`;
+    if (!el) return;
+    const parts = [];
+    if (lDef) parts.push(lDef.attr);
+    if (rDef && rDef.attr !== (lDef && lDef.attr)) parts.push(rDef.attr);
+    el.textContent = [...new Set(parts)].join(" | ");
   }
 
 }); // end require
 </script>
 <!-- ── Historic Maps Side-by-Side Comparison ──────────────────────────────── -->
-<div id="historicMapsOverlay" style="display:none;position:fixed;inset:0;z-index:9500;background:#1a1a1a;flex-direction:column;">
-  <!-- Header bar -->
-  <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:#1a3d2b;color:#fff;flex-shrink:0;z-index:1;">
-    <span style="font-size:13px;font-weight:bold;font-family:'Georgia',serif;flex:1;">📜 Historic Map Comparison</span>
-    <div style="display:flex;align-items:center;gap:8px;">
-      <label style="font-size:11px;color:#c9dece;font-family:'Georgia',serif;">Left (modern)</label>
-      <select id="hmLeftSelect" onchange="updateHistoricLayer('left')"
-        style="padding:3px 6px;border:1px solid #4a7c5f;border-radius:4px;font-size:11px;background:#2a4d3a;color:#fff;font-family:'Georgia',serif;">
-      </select>
-      <label style="font-size:11px;color:#c9dece;font-family:'Georgia',serif;">Right (historic)</label>
-      <select id="hmRightSelect" onchange="updateHistoricLayer('right')"
-        style="padding:3px 6px;border:1px solid #4a7c5f;border-radius:4px;font-size:11px;background:#2a4d3a;color:#fff;font-family:'Georgia',serif;">
-      </select>
-    </div>
+<div id="historicMapsOverlay" style="display:none;position:fixed;inset:0;z-index:9500;flex-direction:column;">
+  <!-- Floating control bar — matches app button style -->
+  <div id="hmControlBar" style="
+    position:absolute;top:12px;left:50%;transform:translateX(-50%);
+    z-index:1000;display:flex;align-items:center;gap:8px;
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-lg);
+    box-shadow:var(--shadow-lg);padding:6px 12px;font-family:'Georgia',serif;
+    white-space:nowrap;
+  ">
+    <span style="font-size:11px;font-weight:bold;color:var(--ink-mid);margin-right:4px;">📜 Historic Maps</span>
+    <label style="font-size:10px;color:var(--ink-faint);">Left</label>
+    <select id="hmLeftSelect" onchange="updateHistoricLayer('left')"
+      style="padding:3px 6px;border:1px solid var(--line);border-radius:4px;font-size:11px;font-family:'Georgia',serif;background:var(--surface);color:var(--ink);max-width:160px;">
+    </select>
+    <label style="font-size:10px;color:var(--ink-faint);">Right</label>
+    <select id="hmRightSelect" onchange="updateHistoricLayer('right')"
+      style="padding:3px 6px;border:1px solid var(--line);border-radius:4px;font-size:11px;font-family:'Georgia',serif;background:var(--surface);color:var(--ink);max-width:160px;">
+    </select>
     <button onclick="closeHistoricMaps()"
-      style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:12px;font-family:'Georgia',serif;">
+      style="background:var(--green-dark);border:none;color:#fff;padding:4px 10px;border-radius:var(--radius);cursor:pointer;font-size:11px;font-family:'Georgia',serif;margin-left:4px;">
       ✕ Close
     </button>
   </div>
-  <!-- Attribution bar -->
-  <div id="hmAttribution" style="font-size:9px;color:#999;padding:2px 10px;background:#111;flex-shrink:0;text-align:right;">
-    Historic maps © National Library of Scotland, CC-BY | Modern tiles © OpenStreetMap contributors
-  </div>
-  <!-- Leaflet map container -->
-  <div id="hmMapContainer" style="flex:1;position:relative;"></div>
+  <!-- Zoom warning -->
+  <div id="hmZoomWarn" style="
+    display:none;position:absolute;bottom:32px;left:50%;transform:translateX(-50%);
+    z-index:1000;background:rgba(180,100,0,.92);color:#fff;padding:6px 16px;
+    border-radius:20px;font-size:11px;font-family:'Georgia',serif;pointer-events:none;
+  ">⚠ Zoom in too far for this map layer — tiles not available at this zoom level</div>
+  <!-- Attribution -->
+  <div id="hmAttribution" style="position:absolute;bottom:0;right:0;z-index:1000;font-size:9px;color:#fff;background:rgba(0,0,0,.5);padding:2px 8px;font-family:sans-serif;max-width:60%;text-align:right;"></div>
+  <!-- Leaflet map container — full screen -->
+  <div id="hmMapContainer" style="width:100%;height:100%;"></div>
 </div>
 
 <!-- ── Location Info Popup (right-click) ─────────────────────────────── -->

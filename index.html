@@ -934,10 +934,8 @@
       <div class="section-label">Search distances</div>
       <div id="bufferGroups"></div>
 
-      <!-- JNCC status -->
-      <div id="jnccStatus" style="font-size:10px;padding:5px 8px;margin-bottom:8px;border-radius:4px;background:#f0f7ff;border:1px solid #b8d4f0;color:#1a5da0;">
-        ⏳ Loading species protection data…
-      </div>
+      <!-- JNCC status — hidden until loading is triggered -->
+      <div id="jnccStatus" style="display:none;font-size:10px;padding:5px 8px;margin-bottom:8px;border-radius:4px;background:#f0f7ff;border:1px solid #b8d4f0;color:#1a5da0;"></div>
 
       <!-- Steps -->
       <div class="section-label">Steps</div>
@@ -979,15 +977,24 @@
           <!-- Protection status filters -->
           <div style="display:flex;flex-direction:column;gap:3px;padding:5px 7px;background:var(--bg);border:1px solid var(--line);border-radius:4px;">
             <div style="font-size:10px;font-weight:bold;color:var(--ink-faint);margin-bottom:2px;text-transform:uppercase;letter-spacing:.06em;">Conservation status</div>
+            <!-- Filter rows -->
             <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-mid);cursor:pointer;">
               <input id="filterLegal" type="checkbox" onchange="applyRecordFilters()" style="accent-color:#d22828;width:13px;height:13px;"/>
               <span style="display:inline-block;width:10px;height:10px;border:2px solid #d22828;transform:rotate(45deg);flex-shrink:0;"></span>
-              Legally protected
+              <span style="flex:1;">Legally protected</span>
+              <button id="toggleLegalDiamonds" onclick="toggleDiamonds('legal')" title="Show/hide legal protection symbols on map"
+                style="background:none;border:1px solid #d22828;border-radius:3px;cursor:pointer;padding:1px 5px;font-size:9px;color:#d22828;white-space:nowrap;line-height:1.4;">
+                ◇ on
+              </button>
             </label>
             <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-mid);cursor:pointer;">
               <input id="filterPriority" type="checkbox" onchange="applyRecordFilters()" style="accent-color:#c87800;width:13px;height:13px;"/>
               <span style="display:inline-block;width:10px;height:10px;border:2px solid #c87800;transform:rotate(45deg);flex-shrink:0;"></span>
-              Priority / Red-listed
+              <span style="flex:1;">Priority / Red-listed</span>
+              <button id="togglePriorityDiamonds" onclick="toggleDiamonds('priority')" title="Show/hide priority species symbols on map"
+                style="background:none;border:1px solid #c87800;border-radius:3px;cursor:pointer;padding:1px 5px;font-size:9px;color:#c87800;white-space:nowrap;line-height:1.4;">
+                ◇ on
+              </button>
             </label>
           </div>
           <!-- Location resolution filter -->
@@ -1439,13 +1446,14 @@ require([
   function setJnccStatus(msg, type) {
     const el = document.getElementById("jnccStatus");
     if (!el) return;
+    if (!msg) { el.style.display = "none"; return; }
     const styles = {
       loading: "background:#f0f7ff;border-color:#b8d4f0;color:#1a5da0",
       ok:      "background:#f0faf3;border-color:#c9dece;color:#1a3d2b",
       warn:    "background:#fffbea;border-color:#f0d060;color:#6b5200",
       error:   "background:#fff0f0;border-color:#f5c0c0;color:#c00",
     };
-    el.style.cssText = `font-size:10px;padding:5px 8px;margin-bottom:8px;border-radius:4px;border:1px solid;${styles[type]||styles.loading}`;
+    el.style.cssText = `display:block;font-size:10px;padding:5px 8px;margin-bottom:8px;border-radius:4px;border:1px solid;${styles[type]||styles.loading}`;
     el.textContent = msg;
   }
 
@@ -1702,7 +1710,9 @@ require([
         const rowSample = rows[0] ? JSON.stringify(rows[0]).slice(0, 200) : "no data rows";
         setJnccStatus(`✗ 0 taxa. Hdr row ${headerRowIdx}: ${hdrSample} || Data: ${rowSample}`, "error");
       } else {
-        setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa. BoCC5: ${bocc5Sample || "none"}`, "ok");
+        setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa`, "ok");
+        // Hide after 3 seconds — the user doesn't need a permanent reminder
+        setTimeout(() => setJnccStatus(null), 3000);
       }
 
     } catch(e) {
@@ -1730,6 +1740,8 @@ require([
   // Titles of layers that should always stay visible (red line boundary, tile/basemap layers)
   function isAlwaysVisible(layer) {
     if (CONFIG.redLineTitlePattern.test(layer.title || "")) return true;
+    // Our own GraphicsLayers are always managed explicitly — never hide them automatically
+    if (layer === pinLayer || layer === importLayer || layer === importProtectedLayer) return true;
     // Keep tile-type layers (OSM, WMTS, web-tile, vector-tile) visible — they are basemap-like
     const alwaysTypes = ["tile", "open-street-map", "web-tile", "vector-tile", "wmts"];
     return alwaysTypes.includes(layer.type);
@@ -3762,6 +3774,12 @@ require([
       if (filterPriority) filterPriority.checked = false;
       const filterRes = document.getElementById("filterResolution");
       if (filterRes) filterRes.value = "0";
+      _showLegalDiamonds = true; _showPriorityDiamonds = true;
+      _lastFilteredRecords = null;
+      ["toggleLegalDiamonds","togglePriorityDiamonds"].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) { btn.textContent = "◇ on"; btn.style.opacity = "1"; }
+      });
       document.getElementById("btnDrawLabel").textContent = "Draw red line boundary";
       document.getElementById("btnRun").disabled = true;
       document.getElementById("btnRunLabel").textContent = "Run Desk Study";
@@ -3815,6 +3833,7 @@ require([
   let _importColumnNames = []; // all column names from last import
   let _importGraphics          = [];  // Graphic objects in importLayer
   let _importProtectedGraphics = [];  // Graphic objects in importProtectedLayer
+  let _lastFilteredRecords = null;    // tracks the current visible subset for diamond refresh
   let _allImportRecords = []; // unfiltered plotted records for filtering
 
   window.openImportModal = function() {
@@ -4286,20 +4305,11 @@ require([
       importLayer.add(g);
       importLayer.add(labelG);
       _importGraphics.push(g, labelG);
-
-      // Protected / priority diamond overlay
-      if (hasStatus) {
-        const outlineCol = isProtected ? [210, 40, 40, 1] : [200, 120, 0, 1]; // red = legal, amber = priority
-        const protG = new Graphic({
-          geometry: { type: "point", latitude: rec.lat, longitude: rec.lng, spatialReference: { wkid: 4326 } },
-          symbol: { type: "simple-marker", style: "diamond", color: [0, 0, 0, 0], size: 15,
-                    outline: { color: outlineCol, width: 2 } },
-          attributes: attrs, popupTemplate,
-        });
-        importProtectedLayer.add(protG);
-        _importProtectedGraphics.push(protG);
-      }
     });
+
+    // Store the filtered set so refreshProtectedOverlay can use it
+    _lastFilteredRecords = records;
+    refreshProtectedOverlay();
     updateRecordCount();
   }
   function zoomToImportRecords(records) {
@@ -4484,6 +4494,63 @@ require([
 
     // Restore previous selection if still valid
     if (current && [...sel.options].some(o => o.value === current)) sel.value = current;
+  }
+
+  // ── Diamond overlay visibility ─────────────────────────────────────────────
+  let _showLegalDiamonds    = true;
+  let _showPriorityDiamonds = true;
+
+  window.toggleDiamonds = function(type) {
+    if (type === "legal") {
+      _showLegalDiamonds = !_showLegalDiamonds;
+      const btn = document.getElementById("toggleLegalDiamonds");
+      if (btn) {
+        btn.textContent = _showLegalDiamonds ? "◇ on" : "◇ off";
+        btn.style.opacity = _showLegalDiamonds ? "1" : "0.45";
+      }
+    } else {
+      _showPriorityDiamonds = !_showPriorityDiamonds;
+      const btn = document.getElementById("togglePriorityDiamonds");
+      if (btn) {
+        btn.textContent = _showPriorityDiamonds ? "◇ on" : "◇ off";
+        btn.style.opacity = _showPriorityDiamonds ? "1" : "0.45";
+      }
+    }
+    // Refresh the protected overlay using the currently displayed records
+    refreshProtectedOverlay();
+  };
+
+  // Re-draws importProtectedLayer from the currently visible records,
+  // respecting the legal/priority diamond toggle states.
+  function refreshProtectedOverlay() {
+    importProtectedLayer.removeAll();
+    _importProtectedGraphics = [];
+
+    // Walk the current graphics in importLayer to find which records are shown,
+    // then re-add diamonds for those that match the active toggle states.
+    // Since we store graphics in pairs (marker + label), check every other one.
+    // Easier: iterate _allImportRecords and check if their marker is in importLayer.
+    // Actually simplest: rebuild from the currently plotted records.
+    // importLayer.graphics holds the current visible set — but records are stored
+    // on graphic attributes. Re-derive from _importProtectedGraphics source:
+    // we'll use a stored reference to the last filtered set.
+    const records = _lastFilteredRecords || _allImportRecords;
+    records.forEach(rec => {
+      const isProtected = rec._isLegallyProtected || false;
+      const isPriority  = rec._isPriority  || false;
+      if (!isProtected && !isPriority) return;
+      if (isProtected && !_showLegalDiamonds) return;
+      if (!isProtected && isPriority && !_showPriorityDiamonds) return;
+
+      const outlineCol = isProtected ? [210, 40, 40, 1] : [200, 120, 0, 1];
+      const protG = new Graphic({
+        geometry: { type: "point", latitude: rec.lat, longitude: rec.lng, spatialReference: { wkid: 4326 } },
+        symbol: { type: "simple-marker", style: "diamond", color: [0, 0, 0, 0], size: 15,
+                  outline: { color: outlineCol, width: 2 } },
+      });
+      importProtectedLayer.add(protG);
+      _importProtectedGraphics.push(protG);
+    });
   }
 
   // ── Filters ────────────────────────────────────────────────────────────────

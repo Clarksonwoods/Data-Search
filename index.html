@@ -5762,6 +5762,15 @@ require([
     ],
   };
 
+
+  // Helper: create side-by-side control regardless of how plugin attaches
+  function makeSBS(left, right) {
+    const fn = (typeof L !== "undefined") &&
+      ((L.control && L.control.sideBySide) || window.leafletSideBySide);
+    if (!fn) { console.warn("leaflet-side-by-side plugin not found"); return null; }
+    return fn(left, right);
+  }
+
   let _hmMap = null;         // Leaflet map instance
   let _hmLeftLayer  = null;
   let _hmRightLayer = null;
@@ -5791,19 +5800,29 @@ require([
       css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
       document.head.appendChild(css);
 
-      // Leaflet JS
-      const js = document.createElement("script");
-      js.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-      js.onload = () => {
-        // side-by-side plugin
-        const sbs = document.createElement("script");
-        sbs.src = "https://unpkg.com/leaflet-side-by-side@2.1.0/index.js";
-        sbs.onload = () => { _hmLoaded = true; resolve(); };
-        sbs.onerror = reject;
-        document.head.appendChild(sbs);
+      // Temporarily suppress Dojo's AMD define so Leaflet registers as a global
+      let _amd;
+      if (typeof define === "function" && define.amd) {
+        _amd = define.amd;
+        define.amd = undefined;
+      }
+      const restore = () => {
+        if (_amd !== undefined && typeof define === "function") define.amd = _amd;
       };
-      js.onerror = reject;
-      document.head.appendChild(js);
+
+      const loadScript = (src) => new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = src;
+        s.onload  = res;
+        s.onerror = rej;
+        document.head.appendChild(s);
+      });
+
+      // Load Leaflet first, then side-by-side plugin sequentially
+      loadScript("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js")
+        .then(() => loadScript("https://cdn.jsdelivr.net/npm/leaflet-side-by-side@2.1.0/index.min.js"))
+        .then(() => { restore(); _hmLoaded = true; resolve(); })
+        .catch((e) => { restore(); reject(e); });
     });
   }
 
@@ -5854,7 +5873,8 @@ require([
     _hmLeftLayer  = L.tileLayer(lDef.url, { attribution: lDef.attr, maxZoom: lDef.maxZ }).addTo(_hmMap);
     _hmRightLayer = L.tileLayer(rDef.url, { attribution: rDef.attr, maxZoom: rDef.maxZ }).addTo(_hmMap);
 
-    _hmControl = L.control.sideBySide(_hmLeftLayer, _hmRightLayer).addTo(_hmMap);
+    _hmControl = makeSBS(_hmLeftLayer, _hmRightLayer);
+    if (_hmControl) _hmControl.addTo(_hmMap);
     updateHMAttribution();
   };
 
@@ -5878,7 +5898,8 @@ require([
     }
     if (_hmControl) {
       _hmMap.removeControl(_hmControl);
-      _hmControl = L.control.sideBySide(_hmLeftLayer, _hmRightLayer).addTo(_hmMap);
+      _hmControl = makeSBS(_hmLeftLayer, _hmRightLayer);
+      if (_hmControl) _hmControl.addTo(_hmMap);
     }
     updateHMAttribution();
   };

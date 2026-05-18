@@ -8,7 +8,7 @@ A browser-based ecological desk study tool built on the ArcGIS Maps SDK for Java
 ## Live URL
 
 ```
-https://charlie-fayers.github.io/Desktop-Survey/
+https://charlie-fayers.github.io/Data-Search/
 ```
 
 ---

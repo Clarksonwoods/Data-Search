@@ -1144,6 +1144,8 @@ require([
   "esri/WebMap",
   "esri/geometry/geometryEngineAsync",
   "esri/geometry/geometryEngine",
+  "esri/geometry/projection",
+  "esri/geometry/SpatialReference",
   "esri/geometry/Extent",
   "esri/Graphic",
   "esri/rest/query",
@@ -1155,6 +1157,8 @@ require([
   Map, MapView, WebMap,
   geometryEngineAsync,
   geometryEngine,
+  projection,
+  SpatialReference,
   Extent,
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager,
@@ -2339,6 +2343,19 @@ require([
     setStatus("running", "Building buffers and querying layers…");
     showProgress(5, "Building buffers…");
 
+    // Normalise the boundary to Web Mercator. geodesicBuffer only accepts
+    // WGS84 / Web Mercator geometry (anything else — e.g. British National
+    // Grid, wkid 27700 — throws "Not Implemented"), and all downstream query
+    // and distance code assumes Web Mercator. So reproject up front if needed.
+    const rlbWkid = selectedGeom.spatialReference &&
+      (selectedGeom.spatialReference.wkid || selectedGeom.spatialReference.latestWkid);
+    if (rlbWkid !== 3857 && rlbWkid !== 102100 && rlbWkid !== 4326) {
+      await projection.load();
+      const projected = projection.project(selectedGeom, SpatialReference.WebMercator);
+      if (projected) selectedGeom = projected;
+      else throw new Error(`Could not reproject the boundary (spatial reference ${rlbWkid || "unknown"}).`);
+    }
+
     // Kick off JNCC loading NOW in parallel — it runs while buffers are built and layers queried
     const jnccPromise = loadJncc();
 
@@ -2361,9 +2378,14 @@ require([
         console.warn("Async buffer failed, falling back to sync engine:", e.message);
       }
       // Synchronous fallback — slower but has no worker to stall.
-      let g = geometryEngine.geodesicBuffer(geom, m, "meters");
-      if (!g) g = geometryEngine.buffer(geom, m, "meters");
-      return g;
+      try {
+        const g = geometryEngine.geodesicBuffer(geom, m, "meters");
+        if (g) return g;
+      } catch (e) {
+        console.warn("Sync geodesicBuffer failed, using planar buffer:", e.message);
+      }
+      // Planar buffer works in any projection; accurate for metre-based ones.
+      return geometryEngine.buffer(geom, m, "meters");
     };
     for (const [cat, km] of Object.entries(buffers)) {
       const m = km * 1000;

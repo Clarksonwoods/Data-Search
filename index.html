@@ -1780,6 +1780,24 @@ require([
     return alwaysTypes.includes(layer.type);
   }
 
+  // Heavy datasets that stay OFF by default even after the map is "revealed",
+  // to keep the map fast. They are still QUERIED normally during a desk study
+  // (queries hit the REST services directly and don't depend on visibility).
+  // The user can switch any of these on manually in the layer panel.
+  // Match is a case-insensitive substring on the layer/group title.
+  const DEFAULT_OFF_TITLES = [
+    "habitats",              // "Habitats" group
+    "watercourses",          // "Watercourses and Hydrology"
+    "aonb",                  // "AONBs" (England + Wales)
+    "wales designated",      // "Wales Designated Sites"
+    "great crested",         // "Great Crested Newts"
+    "lerc",                  // "Lerc boundaries"
+  ];
+  function isDefaultOff(layer) {
+    const t = (layer.title || "").toLowerCase();
+    return DEFAULT_OFF_TITLES.some(p => t.includes(p));
+  }
+
   // Returns true if this layer or any descendant matches the always-visible pattern
   function containsAlwaysVisible(layer) {
     if (isAlwaysVisible(layer)) return true;
@@ -1815,8 +1833,10 @@ require([
     webMap.layers.forEach(layer => {
       // Restore every layer to visible — the web map's original state is used.
       // Always-visible layers were never hidden so this is safe for all.
+      // Default-off heavy datasets are left hidden (still queried, not drawn).
+      if (isDefaultOff(layer)) { layer.visible = false; return; }
       layer.visible = true;
-      if (layer.layers) layer.layers.forEach(child => { child.visible = true; });
+      if (layer.layers) layer.layers.forEach(child => { child.visible = !isDefaultOff(child); });
     });
     buildLayerPanel();
   }
@@ -2592,6 +2612,13 @@ require([
         results[cfg.title] = { status: "missing", cfg, error: "WMS layer — cannot query directly" };
         update();
         return;
+      }
+
+      // Ensure the service URL / layerId are populated. Layers left hidden by
+      // default (see DEFAULT_OFF_TITLES) are never rendered, so the view won't
+      // have loaded them — load on demand so they still query correctly.
+      if (!layer.loaded && typeof layer.load === "function") {
+        try { await layer.load(); } catch (e) { /* fall through — url may still resolve */ }
       }
 
       // Build service URL

@@ -1143,6 +1143,7 @@ require([
   "esri/views/MapView",
   "esri/WebMap",
   "esri/geometry/geometryEngineAsync",
+  "esri/geometry/geometryEngine",
   "esri/geometry/Extent",
   "esri/Graphic",
   "esri/rest/query",
@@ -1153,6 +1154,7 @@ require([
 ], function(
   Map, MapView, WebMap,
   geometryEngineAsync,
+  geometryEngine,
   Extent,
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager,
@@ -2332,18 +2334,41 @@ require([
     document.getElementById("layerResults").style.display = "none";
     document.getElementById("reportBox").classList.remove("visible");
 
+   try {
+
     setStatus("running", "Building buffers and querying layers…");
     showProgress(5, "Building buffers…");
 
     // Kick off JNCC loading NOW in parallel — it runs while buffers are built and layers queried
     const jnccPromise = loadJncc();
 
-    // Build one buffer geometry per category
+    // Build one buffer geometry per category.
+    // The async (worker-based) geometry engine can silently stall if its worker
+    // stops responding — which freezes the whole run. So we race each async call
+    // against a timeout and fall back to the synchronous engine (main thread).
     const bufGeoms = {};
+    const bufferMeters = async (geom, m) => {
+      const withTimeout = (p, ms) => Promise.race([
+        p,
+        new Promise((_, rej) => setTimeout(() => rej(new Error("geometry engine timed out")), ms)),
+      ]);
+      // Try the fast async worker first, but don't let it hang forever.
+      try {
+        let g = await withTimeout(geometryEngineAsync.geodesicBuffer(geom, m, "meters"), 8000);
+        if (!g) g = await withTimeout(geometryEngineAsync.buffer(geom, m, "meters"), 8000);
+        if (g) return g;
+      } catch (e) {
+        console.warn("Async buffer failed, falling back to sync engine:", e.message);
+      }
+      // Synchronous fallback — slower but has no worker to stall.
+      let g = geometryEngine.geodesicBuffer(geom, m, "meters");
+      if (!g) g = geometryEngine.buffer(geom, m, "meters");
+      return g;
+    };
     for (const [cat, km] of Object.entries(buffers)) {
       const m = km * 1000;
-      let g = await geometryEngineAsync.geodesicBuffer(selectedGeom, m, "meters");
-      if (!g) g = await geometryEngineAsync.buffer(selectedGeom, m, "meters");
+      const g = await bufferMeters(selectedGeom, m);
+      if (!g) throw new Error(`Could not build the ${km}km buffer — the boundary geometry may be invalid.`);
       bufGeoms[cat] = g;
     }
 
@@ -2742,8 +2767,16 @@ require([
     const report = await buildReport(results, buffers, selectedGeom);
     renderReport(report);
     setStatus("info", `✓ Screening complete — ${CONFIG.layers.filter(l => results[l.title]?.status === "found").length} layer(s) with intersecting features.`);
-    resetRunButton();
 
+   } catch (err) {
+      // Any failure in the run must surface visibly and leave the UI usable —
+      // never a silent freeze on "Building buffers…".
+      console.error("Desk study run failed:", err);
+      setStatus("error", `✗ Run failed: ${err && err.message ? err.message : err}. Please try again.`);
+   } finally {
+      hideProgress();
+      resetRunButton();
+   }
   };
 
   // ── Layer results list ────────────────────────────────────────────────────
